@@ -1,0 +1,46 @@
+"""
+Database package for NeuralForge StudyMate.
+"""
+from .db import (
+    get_db_connection,
+    init_db,
+    close_db_connection,
+    DB_PATH,
+    create_department,
+    create_course,
+    create_user,
+    create_study_material,
+    get_department_by_code,
+    get_all_departments,
+    get_department_by_id,
+    get_course_by_code,
+    get_course_by_id,
+    get_courses_by_department,
+    get_all_courses,
+    get_user_by_email,
+    get_user_by_id,
+    get_study_material_by_id,
+    get_study_materials_by_user,
+)
+
+__all__ = [
+    "get_db_connection",
+    "init_db",
+    "close_db_connection",
+    "DB_PATH",
+    "create_department",
+    "create_course",
+    "create_user",
+    "create_study_material",
+    "get_department_by_code",
+    "get_all_departments",
+    "get_department_by_id",
+    "get_course_by_code",
+    "get_course_by_id",
+    "get_courses_by_department",
+    "get_all_courses",
+    "get_user_by_email",
+    "get_user_by_id",
+    "get_study_material_by_id",
+    "get_study_materials_by_user",
+]

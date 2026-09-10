@@ -1,0 +1,86 @@
+<nav class="fixed top-0 inset-x-0 z-50 backdrop-blur-md bg-slate-950/70 border-b border-white/5">
+  <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+    <div class="flex items-center justify-between h-16">
+
+      <!-- Logo -->
+      <a href="#" class="flex items-center gap-2">
+        <span class="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-purple-500 flex items-center justify-center text-white font-extrabold text-sm">N</span>
+        <span class="text-white font-bold text-lg tracking-tight">NeuralForge <span class="text-brand-500">StudyMate</span></span>
+      </a>
+
+      <!-- Desktop links -->
+      <div class="hidden md:flex items-center gap-6 text-sm font-medium">
+        {% if session.get('user_id') %}
+          <a href="{{ url_for('upload_study_material') }}" class="text-brand-300 hover:text-white transition font-semibold">Upload Material</a>
+          <a href="{{ url_for('my_study_materials') }}" class="text-slate-300 hover:text-white transition">My Materials</a>
+        {% endif %}
+        <a href="{{ url_for('home') }}#upload-section" class="text-slate-300 hover:text-white transition">Studio</a>
+        <a href="{{ url_for('home') }}#features" class="text-slate-300 hover:text-white transition">Features</a>
+        <a href="{{ url_for('home') }}#about" class="text-slate-300 hover:text-white transition">About</a>
+      </div>
+
+      <!-- CTA + Auth + hamburger -->
+      <div class="flex items-center gap-3">
+        {% if session.get('user_id') %}
+          <!-- Authenticated User Display -->
+          <div class="hidden sm:flex items-center gap-2 px-3 py-1 rounded-xl bg-slate-900 border border-white/10 text-xs">
+            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+            <span class="font-semibold text-white truncate max-w-[140px]">{{ session.get('user_name') }}</span>
+            {% if session.get('user_role') == 'admin' %}
+              <span class="px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono text-[10px] font-bold">ADMIN</span>
+            {% endif %}
+          </div>
+          <a href="{{ url_for('logout') }}" id="nav-logout-btn" class="hidden sm:inline-flex px-3.5 py-1.5 rounded-lg border border-white/10 hover:bg-white/5 text-slate-300 hover:text-white text-xs font-semibold transition">
+            Log out
+          </a>
+        {% else %}
+          <!-- Logged Out Links -->
+          <a href="{{ url_for('login') }}" id="nav-login-btn" class="hidden sm:inline-flex text-xs font-semibold text-slate-300 hover:text-white transition px-2 py-1">
+            Log in
+          </a>
+          <a href="{{ url_for('register') }}" id="nav-register-btn" class="hidden sm:inline-flex px-3 py-1.5 rounded-lg border border-white/10 hover:bg-white/5 text-white text-xs font-semibold transition">
+            Register
+          </a>
+        {% endif %}
+
+        <a href="{{ url_for('home') }}#upload-section" class="hidden md:inline-flex px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold transition shadow-lg shadow-brand-600/25">
+          Upload PDF
+        </a>
+        <button id="menu-btn" class="md:hidden p-2 text-slate-300 hover:text-white" aria-label="Toggle menu" aria-expanded="false">
+          <svg id="icon-open" class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/>
+          </svg>
+          <svg id="icon-close" class="w-6 h-6 hidden" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mobile menu -->
+  <div id="mobile-menu" class="hidden md:hidden px-4 pb-4 pt-2 space-y-2 bg-slate-950/95 border-t border-white/5">
+    {% if session.get('user_id') %}
+      <a href="{{ url_for('upload_study_material') }}" class="block px-3 py-2 rounded-lg text-brand-300 hover:bg-white/5 font-semibold transition">Upload Study Material</a>
+      <a href="{{ url_for('my_study_materials') }}" class="block px-3 py-2 rounded-lg text-slate-300 hover:bg-white/5 transition">My Study Materials</a>
+    {% endif %}
+    <a href="{{ url_for('home') }}#upload-section" class="block px-3 py-2 rounded-lg text-slate-300 hover:bg-white/5 hover:text-white transition">Studio</a>
+    <a href="{{ url_for('home') }}#features" class="block px-3 py-2 rounded-lg text-slate-300 hover:bg-white/5 hover:text-white transition">Features</a>
+    <a href="{{ url_for('home') }}#about" class="block px-3 py-2 rounded-lg text-slate-300 hover:bg-white/5 hover:text-white transition">About</a>
+    {% if session.get('user_id') %}
+      <div class="px-3 py-2 rounded-lg bg-slate-900 border border-white/10 text-xs text-slate-300 flex items-center justify-between">
+        <span>Logged in as <strong class="text-white">{{ session.get('user_name') }}</strong></span>
+        {% if session.get('user_role') == 'admin' %}
+          <span class="px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono text-[10px] font-bold">ADMIN</span>
+        {% endif %}
+      </div>
+      <a href="{{ url_for('logout') }}" class="block px-3 py-2 rounded-lg text-rose-300 hover:bg-rose-500/10 font-semibold transition">Log out</a>
+    {% else %}
+      <div class="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
+        <a href="{{ url_for('login') }}" class="block px-3 py-2 rounded-lg text-center text-slate-200 bg-slate-900 hover:bg-slate-800 font-semibold text-xs transition">Log in</a>
+        <a href="{{ url_for('register') }}" class="block px-3 py-2 rounded-lg text-center text-white bg-brand-600 hover:bg-brand-500 font-semibold text-xs transition">Register</a>
+      </div>
+    {% endif %}
+    <a href="{{ url_for('home') }}#upload-section" class="block px-3 py-2 rounded-lg bg-brand-600 text-white font-semibold text-center text-xs">Upload PDF</a>
+  </div>
+</nav>

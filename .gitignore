@@ -1,0 +1,15 @@
+# Secrets - never push these
+.env
+
+# Database and uploaded files
+studymate.db
+uploads/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# Editor
+.vscode/
+.idea/

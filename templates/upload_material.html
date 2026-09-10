@@ -1,0 +1,279 @@
+{% extends "base.html" %}
+
+{% block title %}Upload Study Material | NeuralForge StudyMate{% endblock %}
+
+{% block content %}
+<section class="relative min-h-[calc(100vh-140px)] py-16 sm:py-24 px-4 sm:px-6 lg:px-8">
+  <div class="hero-glow hero-glow-one"></div>
+  <div class="hero-glow hero-glow-two"></div>
+
+  <div class="max-w-3xl mx-auto relative z-10">
+    <!-- Header -->
+    <div class="text-center mb-10">
+      <div
+        class="inline-flex items-center gap-2 rounded-full border border-brand-500/20 bg-brand-500/10 px-3 py-1 text-xs font-semibold text-brand-300 mb-3">
+        <span class="h-1.5 w-1.5 rounded-full bg-brand-400"></span>
+        Step 7 • Study Material Submission
+      </div>
+      <h1 class="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
+        Submit Study Material
+      </h1>
+      <p class="mt-3 text-sm sm:text-base text-slate-400 max-w-xl mx-auto">
+        Share your lecture notes, summaries, and exam resources. All submissions are reviewed by an administrator before
+        becoming available in the library.
+      </p>
+    </div>
+
+    <!-- Upload Card -->
+    <div
+      class="rounded-2xl border border-white/10 bg-slate-900/80 p-6 sm:p-10 backdrop-blur shadow-2xl shadow-brand-950/60">
+
+      <!-- Flash Messages -->
+      {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      <div id="flash-container" class="mb-6 space-y-2">
+        {% for category, message in messages %}
+        <div class="p-4 rounded-xl border text-xs sm:text-sm flex items-start gap-3
+                {% if category == 'error' %}bg-rose-500/10 border-rose-500/30 text-rose-300
+                {% elif category == 'success' %}bg-emerald-500/10 border-emerald-500/30 text-emerald-300
+                {% else %}bg-amber-500/10 border-amber-500/30 text-amber-300{% endif %}">
+          <svg class="w-5 h-5 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            {% if category == 'error' %}
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+            {% elif category == 'success' %}
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+            {% else %}
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z" />
+            {% endif %}
+          </svg>
+          <div class="flex-1">
+            <p class="font-semibold">{{ message }}</p>
+            {% if category == 'success' %}
+            <p class="mt-1 text-xs text-emerald-400/90 font-mono">Status: Pending Approval (Review queue)</p>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% endwith %}
+
+      <form id="study-material-form" method="POST" action="{{ url_for('upload_study_material') }}"
+        enctype="multipart/form-data" class="space-y-6">
+
+        <!-- Department Info Badge -->
+        <div
+          class="p-4 rounded-xl border border-white/5 bg-slate-950/60 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div>
+            <span class="text-xs text-slate-400 font-medium">Uploader Department</span>
+            <p class="text-sm font-bold text-white flex items-center gap-2 mt-0.5">
+              <span class="px-2 py-0.5 rounded bg-brand-500/20 text-brand-300 font-mono text-xs">{{ user_department.code
+                if user_department else 'N/A' }}</span>
+              <span>{{ user_department.name if user_department else 'Unknown Department' }}</span>
+            </p>
+          </div>
+          <span class="text-[11px] text-slate-400 bg-slate-900 border border-white/10 px-2.5 py-1 rounded-lg">
+            Role: <strong class="text-brand-300 capitalize">{{ session.get('user_role', 'student') }}</strong>
+          </span>
+        </div>
+
+        <!-- Academic Metadata Grid -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+          <!-- Course Selection (Enforces user's department) -->
+          <div class="sm:col-span-2">
+            <label for="course_id" class="block text-xs font-semibold text-slate-300 mb-1.5">
+              Course <span class="text-rose-400">*</span>
+            </label>
+            {% if courses and courses|length > 0 %}
+            <select id="course_id" name="course_id" required
+              class="w-full rounded-xl border border-white/10 bg-slate-950/80 px-3.5 py-2.5 text-xs sm:text-sm text-white focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 transition">
+              <option value="" disabled selected>Select an approved course from {{ user_department.code if
+                user_department else 'your department' }}</option>
+              {% for course in courses %}
+              <option value="{{ course.id }}" {% if form_data and form_data.course_id|string==course.id|string
+                %}selected{% endif %}>
+                {{ course.course_code }} — {{ course.course_name }}
+              </option>
+              {% endfor %}
+            </select>
+            {% else %}
+            <div class="p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-300 text-xs">
+              No active courses found for {{ user_department.code if user_department else 'your department' }}. Please
+              contact your administrator.
+            </div>
+            {% endif %}
+          </div>
+
+          <!-- Exam Type -->
+          <div>
+            <label for="exam_type" class="block text-xs font-semibold text-slate-300 mb-1.5">
+              Exam Type <span class="text-rose-400">*</span>
+            </label>
+            <select id="exam_type" name="exam_type" required
+              class="w-full rounded-xl border border-white/10 bg-slate-950/80 px-3.5 py-2.5 text-xs sm:text-sm text-white focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 transition capitalize">
+              <option value="" disabled selected>Select exam scope</option>
+              <option value="midterm" {% if form_data and form_data.exam_type=='midterm' %}selected{% endif %}>Midterm
+              </option>
+              <option value="final" {% if form_data and form_data.exam_type=='final' %}selected{% endif %}>Final
+              </option>
+              <option value="both" {% if form_data and form_data.exam_type=='both' %}selected{% endif %}>Both (Full
+                Syllabus)</option>
+            </select>
+          </div>
+
+          <!-- Topic / Chapter -->
+          <div>
+            <label for="topic" class="block text-xs font-semibold text-slate-300 mb-1.5">
+              Topic / Chapter <span class="text-rose-400">*</span>
+            </label>
+            <input type="text" id="topic" name="topic" value="{{ form_data.topic if form_data else '' }}"
+              placeholder="e.g. Normalization & Relational Algebra" required
+              class="w-full rounded-xl border border-white/10 bg-slate-950/80 px-3.5 py-2.5 text-xs sm:text-sm text-white placeholder-slate-500 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 transition" />
+          </div>
+        </div>
+
+        <!-- PDF Upload Zone -->
+        <div>
+          <label class="block text-xs font-semibold text-slate-300 mb-1.5">
+            Study Material Document (PDF) <span class="text-rose-400">*</span>
+          </label>
+          <div id="material-drop-zone"
+            class="relative border-2 border-dashed border-white/15 hover:border-brand-500/60 rounded-xl p-8 sm:p-10 text-center transition-all bg-slate-950/40 cursor-pointer group">
+            <input type="file" id="material-file-input" name="file" accept=".pdf,application/pdf" required
+              class="sr-only" />
+
+            <div class="flex flex-col items-center justify-center space-y-3 pointer-events-none">
+              <div
+                class="w-12 h-12 rounded-xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center text-brand-400 group-hover:scale-110 group-hover:bg-brand-500/20 transition-all">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                </svg>
+              </div>
+              <div>
+                <p class="text-sm font-semibold text-white">
+                  <span class="text-brand-400 underline underline-offset-2">Click to select PDF</span> or drag and drop
+                </p>
+                <p class="text-xs text-slate-400 mt-1">PDF documents only (maximum size: 16 MB)</p>
+              </div>
+              <div id="material-file-badge"
+                class="hidden items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 border border-brand-500/30 text-xs text-brand-300 font-medium">
+                <svg class="w-4 h-4 text-brand-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2"
+                  viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M9 12h6m-6 4h4m2 5H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5.5L17 7.5V19a2 2 0 0 1-2 2Z" />
+                </svg>
+                <span id="material-file-name" class="truncate max-w-xs">No file selected</span>
+                <span id="material-file-size" class="text-slate-400 text-[11px]"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Workflow Notice -->
+        <div class="rounded-xl border border-brand-500/20 bg-brand-500/5 p-4 flex items-start gap-3">
+          <svg class="w-5 h-5 text-brand-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2"
+            viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+          </svg>
+          <div class="text-xs text-slate-300 leading-relaxed">
+            <strong class="text-white">Admin Approval Workflow:</strong> Your submission will be created with status
+            <span class="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono font-semibold">pending</span>.
+            It will not be made public until reviewed and approved by an administrator.
+          </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2">
+          <a href="{{ url_for('my_study_materials') }}"
+            class="text-xs text-brand-400 hover:text-brand-300 underline underline-offset-2 transition order-2 sm:order-1">
+            View My Upload History →
+          </a>
+          <button type="submit" id="submit-material-btn"
+            class="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-sm font-bold px-7 py-3 shadow-lg shadow-brand-600/25 hover:shadow-brand-500/40 transition-all order-1 sm:order-2">
+            <span>Submit Study Material</span>
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+            </svg>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</section>
+
+<script>
+  // Simple interactive drag & drop helper for this form
+  document.addEventListener('DOMContentLoaded', () => {
+    const dropZone = document.getElementById('material-drop-zone');
+    const fileInput = document.getElementById('material-file-input');
+    const fileBadge = document.getElementById('material-file-badge');
+    const fileName = document.getElementById('material-file-name');
+    const fileSize = document.getElementById('material-file-size');
+
+    if (!dropZone || !fileInput) return;
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    function handleFile(file) {
+      if (!file) return;
+      if (!file.name.toLowerCase().endsWith('.pdf')) {
+        alert('Invalid file type. Only PDF files are allowed.');
+        fileInput.value = '';
+        fileBadge.classList.add('hidden');
+        return;
+      }
+      if (file.size > 16 * 1024 * 1024) {
+        alert('File size exceeds the 16 MB limit.');
+        fileInput.value = '';
+        fileBadge.classList.add('hidden');
+        return;
+      }
+      fileName.textContent = file.name;
+      fileSize.textContent = `(${formatBytes(file.size)})`;
+      fileBadge.classList.remove('hidden');
+      fileBadge.classList.add('inline-flex');
+    }
+
+    dropZone.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files && e.target.files[0]) {
+        handleFile(e.target.files[0]);
+      }
+    });
+
+    ['dragenter', 'dragover'].forEach(name => {
+      dropZone.addEventListener(name, (e) => {
+        e.preventDefault();
+        dropZone.classList.add('border-brand-500', 'bg-brand-500/10');
+      });
+    });
+
+    ['dragleave', 'drop'].forEach(name => {
+      dropZone.addEventListener(name, (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('border-brand-500', 'bg-brand-500/10');
+      });
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+        fileInput.files = e.dataTransfer.files;
+        handleFile(e.dataTransfer.files[0]);
+      }
+    });
+  });
+</script>
+{% endblock %}

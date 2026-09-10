@@ -1,0 +1,37 @@
+/* NeuralForge StudyMate — presentation layer */
+body { background-image: radial-gradient(circle at 50% -20%, rgba(91,108,255,.13), transparent 38rem); }
+.hero-glow { position:absolute; border-radius:9999px; filter:blur(80px); pointer-events:none; opacity:.28; }
+.hero-glow-one { width:20rem; height:20rem; top:5rem; left:-8rem; background:#5b6cff; }
+.hero-glow-two { width:16rem; height:16rem; top:12rem; right:-5rem; background:#9333ea; }
+.gradient-text { background:linear-gradient(110deg,#a5b4fc,#67e8f9 55%,#c084fc); -webkit-background-clip:text; background-clip:text; color:transparent; }
+.feature-card { padding:1.75rem; border:1px solid rgba(255,255,255,.08); border-radius:1rem; background:rgba(255,255,255,.035); transition:transform .3s ease, border-color .3s ease, background .3s ease; }
+.feature-card:hover { transform:translateY(-5px); border-color:rgba(91,108,255,.45); background:rgba(91,108,255,.07); }
+.icon-box { width:3rem; height:3rem; display:flex; align-items:center; justify-content:center; border-radius:.75rem; }
+.icon-box svg { width:1.5rem; height:1.5rem; }
+.reveal { opacity:0; transform:translateY(18px); animation:rise .7s ease forwards; }
+.delay-1 { animation-delay:.12s; } .delay-2 { animation-delay:.22s; } .delay-3 { animation-delay:.32s; }
+@keyframes rise { to { opacity:1; transform:translateY(0); } }
+@media (prefers-reduced-motion:reduce) { *, *::before, *::after { animation-duration:.01ms !important; transition-duration:.01ms !important; } }
+
+/* Drag and drop active state */
+.drag-active {
+  border-color: #5b6cff !important;
+  background: rgba(91, 108, 255, 0.08) !important;
+}
+
+/* Custom code preview scrollbar */
+#extracted-text-content::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+#extracted-text-content::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.8);
+  border-radius: 4px;
+}
+#extracted-text-content::-webkit-scrollbar-thumb {
+  background: rgba(91, 108, 255, 0.35);
+  border-radius: 4px;
+}
+#extracted-text-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(91, 108, 255, 0.6);
+}
