@@ -1,0 +1,30 @@
+export default async function run(page) {
+  const result = { steps: [], consoleErrors: [], failedRequests: [] };
+  page.on('console', msg => { if (msg.type() === 'error') result.consoleErrors.push(msg.text()); });
+  page.on('requestfailed', req => result.failedRequests.push(`${req.method()} ${req.url()}`));
+  const email = 'browser_step8_admin@example.com';
+  await page.goto('http://127.0.0.1:5000/admin/dashboard');
+  result.steps.push({ name: 'unauth redirected', ok: page.url().includes('/login') });
+  await page.locator('#email').fill(email);
+  await page.locator('#password').fill('AdminPass123');
+  await page.locator('button[type="submit"]').click();
+  await page.waitForTimeout(1000);
+  await page.goto('http://127.0.0.1:5000/admin/dashboard');
+  const body = await page.innerText('body');
+  result.steps.push({ name: 'admin dashboard', ok: body.includes('Admin Dashboard') && body.includes('Normalization') });
+  await page.getByRole('link', { name: 'View PDF' }).first().click();
+  await page.waitForURL(/\/admin\/material\/\d+$/);
+  const detailText = await page.innerText('body');
+  result.steps.push({ name: 'material detail', url: page.url(), ok: detailText.includes('Normalization') && (await page.locator('iframe').count()) === 1 });
+  await page.waitForTimeout(1500);
+  const pdfResponse = await page.request.get(page.url() + '/pdf');
+  result.steps.push({ name: 'controlled pdf', ok: pdfResponse.status() === 200 && (pdfResponse.headers()['content-type'] || '').includes('application/pdf') });
+  await page.goto('http://127.0.0.1:5000/admin/dashboard');
+  const beforeApprovalCount = await page.getByRole('button', { name: 'Approve' }).count();
+  const targetCard = page.locator('div').filter({ hasText: 'Normalization' }).filter({ has: page.getByRole('button', { name: 'Approve' }) }).last();
+  await targetCard.getByRole('button', { name: 'Approve' }).click();
+  await page.waitForTimeout(500);
+  const afterApproval = await page.innerText('body');
+  result.steps.push({ name: 'approve removes pending item', ok: (await page.getByRole('button', { name: 'Approve' }).count()) === beforeApprovalCount - 1 });
+  return result;
+}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Study Notes Library | NeuralForge StudyMate{% endblock %}
+{% block content %}
+<section class="relative min-h-[calc(100vh-140px)] py-16 sm:py-24 px-4 sm:px-6 lg:px-8">
+  <div class="hero-glow hero-glow-one"></div><div class="hero-glow hero-glow-two"></div>
+  <div class="max-w-6xl mx-auto relative z-10">
+    <div class="mb-8">
+      <div class="inline-flex items-center gap-2 rounded-full border-brand-500/20 bg-brand-500/10 px-3 py-1 text-xs font-semibold text-brand-300 mb-2">📚 Approved Resources</div>
+      <h1 class="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">Study Notes Library</h1>
+      <p class="mt-2 text-sm text-slate-400">Discover administrator-approved notes, guides, and revision materials.</p>
+    </div>
+
+    <form method="GET" action="{{ url_for('study_library') }}" class="rounded-2xl border-white/10 bg-slate-900/80 p-4 sm:p-5 mb-8 backdrop-blur">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        <div><label for="department_id" class="block text-[11px] text-slate-400 font-semibold mb-1">Department</label><select id="department_id" name="department_id" class="form-select w-full" onchange="this.form.submit()"><option value="">All Departments</option>{% for item in departments %}<option value="{{ item.id }}" {% if item.id == selected_department_id %}selected{% endif %}>{{ item.code }} — {{ item.name }}</option>{% endfor %}</select></div>
+        <div><label for="course_id" class="block text-[11px] text-slate-400 font-semibold mb-1">Course</label><select id="course_id" name="course_id" class="form-select w-full"><option value="">All Courses</option>{% for item in courses %}<option value="{{ item.id }}" {% if item.id == selected_course_id %}selected{% endif %}>{{ item.course_code }} — {{ item.course_name }}</option>{% endfor %}</select></div>
+        <div><label for="course_code" class="block text-[11px] text-slate-400 font-semibold mb-1">Course Code</label><input id="course_code" name="course_code" value="{{ course_code }}" placeholder="e.g. CSE 221" class="form-input w-full"></div>
+        <div><label for="exam_type" class="block text-[11px] text-slate-400 font-semibold mb-1">Exam Type</label><select id="exam_type" name="exam_type" class="form-select w-full"><option value="">All Exams</option><option value="midterm" {% if exam_type == 'midterm' %}selected{% endif %}>Midterm</option><option value="final" {% if exam_type == 'final' %}selected{% endif %}>Final</option><option value="both" {% if exam_type == 'both' %}selected{% endif %}>Both</option></select></div>
+        <div><label for="topic" class="block text-[11px] text-slate-400 font-semibold mb-1">Topic</label><input id="topic" name="topic" value="{{ topic }}" placeholder="Search topics" class="form-input w-full"></div>
+      </div>
+      <div class="mt-4 flex items-center gap-3"><button type="submit" class="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold transition">Search Library</button><a href="{{ url_for('study_library') }}" class="text-xs text-slate-400 hover:text-white">Clear filters</a></div>
+    </form>
+
+    {% if error %}<div class="mb-5 p-3 rounded-xl border-rose-500/30 bg-rose-500/10 text-rose-300 text-sm">{{ error }}</div>{% endif %}
+    {% if materials %}
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {% for item in materials %}
+        <article class="rounded-2xl border-white/10 bg-slate-900/80 p-5 backdrop-blur hover:border-brand-500/30 transition">
+          <div class="flex items-start justify-between gap-3"><div><span class="inline-block px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 font-mono text-xs font-bold">{{ item.course_code }}</span><h2 class="mt-3 text-lg font-bold text-white">{{ item.topic }}</h2></div><span class="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-[11px] font-semibold">🟢 Approved</span></div>
+          <p class="mt-2 text-sm text-slate-300">{{ item.course_name }}</p><div class="mt-3 space-y-1 text-xs text-slate-400"><p>Department: <span class="text-slate-200">{{ item.department_code }}</span></p><p>Exam: <span class="capitalize text-slate-200">{{ item.exam_type }}</span></p><p>Uploaded: {{ item.created_at }}{% if item.uploader_name %} · {{ item.uploader_name }}{% endif %}</p></div>
+          <div class="mt-5 flex gap-2"><a href="{{ url_for('study_library_material_pdf', material_id=item.id) }}" target="_blank" class="px-3.5 py-2 rounded-lg border-white/10 hover:bg-white/5 text-slate-200 text-xs font-semibold">View</a><a href="{{ url_for('study_library_material_download', material_id=item.id) }}" class="px-3.5 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold">Download</a></div>
+        </article>
+      {% endfor %}
+      </div>
+      {% if total_pages > 1 %}<div class="mt-8 flex justify-center gap-2">{% for n in range(1, total_pages + 1) %}<a href="{{ url_for('study_library', department_id=selected_department_id or '', course_id=selected_course_id or '', course_code=course_code, exam_type=exam_type, topic=topic, page=n) }}" class="px-3 py-1.5 rounded-lg text-xs {% if n == page %}bg-brand-600 text-white{% else %}bg-slate-900 text-slate-300 border-white/10{% endif %}">{{ n }}</a>{% endfor %}</div>{% endif %}
+    {% else %}<div class="rounded-2xl border-white/10 bg-slate-900/40 p-12 text-center"><div class="text-4xl mb-3">📚</div><h2 class="text-lg font-bold text-white">{% if topic or course_code or exam_type or selected_department_id or selected_course_id %}No materials match your search.{% else %}No approved study materials found.{% endif %}</h2><p class="mt-2 text-sm text-slate-400">Try another filter or check back after more notes are approved.</p></div>{% endif %}
+  </div>
+</section>
+{% endblock %}

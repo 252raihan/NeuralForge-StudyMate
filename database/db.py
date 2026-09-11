@@ -560,7 +560,7 @@ def update_study_material_status(
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE study_materials SET status = ? WHERE id = ?",
+            "UPDATE study_materials SET status = ? WHERE id = ? AND status = 'pending'",
             (new_status, material_id)
         )
         conn.commit()
@@ -568,3 +568,81 @@ def update_study_material_status(
     finally:
         if close_on_exit:
             conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Public Study Library Data Access Functions (Step 9)
+# ---------------------------------------------------------------------------
+
+def get_approved_study_materials(
+    department_id: Optional[int] = None,
+    course_id: Optional[int] = None,
+    course_code: str = "",
+    exam_type: str = "",
+    topic: str = "",
+    page: int = 1,
+    per_page: int = 20,
+    conn: Optional[sqlite3.Connection] = None,
+) -> List[sqlite3.Row]:
+    # Return only approved materials, with validated relational filters.
+    if exam_type and exam_type not in ("midterm", "final", "both"):
+        raise ValueError("Invalid exam type filter.")
+    page = max(int(page or 1), 1)
+    per_page = min(max(int(per_page or 20), 1), 100)
+    clauses = ["sm.status = 'approved'"]
+    params: List[Any] = []
+    if department_id is not None:
+        clauses.append("c.department_id = ?")
+        params.append(department_id)
+    if course_id is not None:
+        clauses.append("sm.course_id = ?")
+        params.append(course_id)
+    if course_code:
+        clauses.append("c.course_code LIKE ? COLLATE NOCASE")
+        params.append(f"%{course_code.strip()}%")
+    if exam_type:
+        clauses.append("sm.exam_type = ?")
+        params.append(exam_type)
+    if topic:
+        clauses.append("sm.topic LIKE ? COLLATE NOCASE")
+        params.append(f"%{topic.strip()}%")
+    params.extend([(page - 1) * per_page, per_page])
+
+    close_on_exit = False
+    if conn is None:
+        conn = get_db_connection()
+        close_on_exit = True
+    try:
+        cursor = conn.cursor()
+        query = (
+            "SELECT sm.id, sm.course_id, sm.topic, sm.exam_type, sm.file_path, "
+            "sm.uploaded_by, sm.status, sm.created_at, c.course_name, c.course_code, "
+            "d.name AS department_name, d.code AS department_code, u.name AS uploader_name "
+            "FROM study_materials sm JOIN courses c ON sm.course_id = c.id "
+            "JOIN departments d ON c.department_id = d.id JOIN users u ON sm.uploaded_by = u.id "
+            "WHERE " + " AND ".join(clauses) +
+            " ORDER BY sm.created_at DESC, sm.id DESC LIMIT ? OFFSET ?"
+        )
+        cursor.execute(query, params)
+        return cursor.fetchall()
+    finally:
+        if close_on_exit:
+            conn.close()
+
+
+def count_approved_study_materials(
+    department_id: Optional[int] = None,
+    course_id: Optional[int] = None,
+    course_code: str = "",
+    exam_type: str = "",
+    topic: str = "",
+    conn: Optional[sqlite3.Connection] = None,
+) -> int:
+    # Count approved materials using the same filters as the library query.
+    # Keep count behavior aligned by querying IDs with a generous bounded limit.
+    # The library only needs a boolean/count for pagination display.
+    rows = get_approved_study_materials(
+        department_id, course_id, course_code, exam_type, topic,
+        page=1, per_page=100000, conn=conn
+    )
+    return len(rows)

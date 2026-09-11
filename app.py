@@ -37,6 +37,8 @@ from database.db import (
     get_study_material_details,
     get_study_materials_by_status,
     update_study_material_status,
+    get_approved_study_materials,
+    count_approved_study_materials,
 )
 from services.auth_service import (
     register_student,
@@ -492,6 +494,105 @@ def my_study_materials():
     materials = get_study_materials_by_user(user_id)
     return render_template("my_materials.html", materials=materials)
 
+
+# ===========================================================================
+# Step 9: Public Study Notes Library Routes
+# ===========================================================================
+
+@app.route("/study-library", methods=["GET"])
+def study_library():
+    # Public library showing only administrator-approved study materials."
+    departments = get_all_departments()
+    department_raw = (request.args.get("department_id") or "").strip()
+    course_raw = (request.args.get("course_id") or "").strip()
+    exam_type = (request.args.get("exam_type") or "").strip().lower()
+    topic = (request.args.get("topic") or "").strip()
+    course_code = (request.args.get("course_code") or "").strip()
+    page_raw = (request.args.get("page") or "1").strip()
+
+    error = None
+    department_id = None
+    course_id = None
+    try:
+        if department_raw:
+            department_id = int(department_raw)
+            if not get_department_by_id(department_id):
+                raise ValueError
+        if course_raw:
+            course_id = int(course_raw)
+            selected_course = get_course_by_id(course_id)
+            if not selected_course:
+                raise ValueError
+            if department_id is not None and selected_course["department_id"] != department_id:
+                raise ValueError
+        page = max(int(page_raw), 1)
+        if exam_type not in ("", "midterm", "final", "both"):
+            raise ValueError
+        materials = get_approved_study_materials(
+            department_id=department_id,
+            course_id=course_id,
+            course_code=course_code,
+            exam_type=exam_type,
+            topic=topic,
+            page=page,
+            per_page=20,
+        )
+        total_count = count_approved_study_materials(
+            department_id=department_id,
+            course_id=course_id,
+            course_code=course_code,
+            exam_type=exam_type,
+            topic=topic,
+        )
+    except (ValueError, TypeError):
+        error = "Invalid department, course, exam type, or page filter."
+        materials = []
+        total_count = 0
+        page = 1
+    selected_department_id = department_id
+    courses = get_courses_by_department(selected_department_id) if selected_department_id else []
+    total_pages = max((total_count + 19) // 20, 1)
+    return render_template(
+        "study_library.html",
+        materials=materials,
+        departments=departments,
+        courses=courses,
+        selected_department_id=selected_department_id,
+        selected_course_id=course_id,
+        exam_type=exam_type,
+        topic=topic,
+        course_code=course_code,
+        page=page,
+        total_pages=total_pages,
+        error=error,
+    )
+
+
+def _serve_approved_material(material_id: int, as_attachment: bool):
+    # Serve a file only after verifying its database status is approved."
+    material = get_study_material_details(material_id)
+    if not material or material["status"] != "approved":
+        abort(404)
+    stored_name = Path(material["file_path"]).name
+    file_location = UPLOAD_FOLDER / stored_name
+    if not file_location.is_file() or file_location.suffix.lower() != ".pdf":
+        abort(404)
+    return send_file(
+        str(file_location),
+        mimetype="application/pdf",
+        as_attachment=as_attachment,
+        download_name=stored_name,
+    )
+
+@app.route("/study-library/material/<int:material_id>/pdf", methods=["GET"])
+def study_library_material_pdf(material_id: int):
+    # Public inline PDF access for approved materials only."
+    return _serve_approved_material(material_id, as_attachment=False)
+
+@app.route("/study-library/material/<int:material_id>/download", methods=["GET"])
+def study_library_material_download(material_id: int):
+    # Public download access for approved materials only."
+    return _serve_approved_material(material_id, as_attachment=True)
 
 # ===========================================================================
 # Step 8: Admin Dashboard & Approval Workflow Routes
