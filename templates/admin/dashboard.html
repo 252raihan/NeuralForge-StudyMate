@@ -76,13 +76,13 @@
                  class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-white/10 hover:bg-white/5 text-slate-300 hover:text-white text-xs font-semibold transition">
                 View PDF
               </a>
-              <form method="POST" action="{{ url_for('admin_approve_material', material_id=item.id) }}" class="inline">
+              <form method="POST" action="{{ url_for('admin_approve_material', material_id=item.id) }}" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button type="submit"
                         class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition shadow-lg shadow-emerald-600/25">
                   Approve
                 </button>
               </form>
-              <form method="POST" action="{{ url_for('admin_reject_material', material_id=item.id) }}" class="inline">
+              <form method="POST" action="{{ url_for('admin_reject_material', material_id=item.id) }}" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button type="submit"
                         class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition shadow-lg shadow-rose-600/25">
                   Reject

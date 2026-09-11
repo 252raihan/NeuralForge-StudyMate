@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Quiz Result | NeuralForge StudyMate{% endblock %}
+{% block content %}
+<section class="min-h-[calc(100vh-140px)] py-16 px-4 sm:px-6 lg:px-8">
+  <div class="max-w-4xl mx-auto">
+    <div class="mb-8">
+      <span class="text-brand-300 text-xs font-bold">📊 QUIZ RESULT</span>
+      <h1 class="mt-2 text-3xl sm:text-4xl font-extrabold text-white">{{ attempt.title }}</h1>
+      <div class="mt-3 flex-wrap gap-2 text-xs">
+        <span class="px-2.5 py-1 rounded-lg bg-purple-500/20 text-purple-300 font-semibold">{{ attempt.course_code
+          }}</span>
+        <span class="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300">Topic: {{ attempt.topic }}</span>
+        <span class="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 capitalize">Difficulty: {{ attempt.difficulty
+          }}</span>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+      <div class="rounded-2xl border-white/10 bg-slate-900/80 p-4 text-center">
+        <p class="text-2xl font-extrabold text-white">{{ attempt.score }}/{{ attempt.total_questions }}</p>
+        <p class="text-xs text-slate-400">Score</p>
+      </div>
+      <div class="rounded-2xl border-white/10 bg-slate-900/80 p-4 text-center">
+        <p class="text-2xl font-extrabold text-emerald-400">{{ attempt.correct_answers }}</p>
+        <p class="text-xs text-slate-400">Correct</p>
+      </div>
+      <div class="rounded-2xl border-white/10 bg-slate-900/80 p-4 text-center">
+        <p class="text-2xl font-extrabold text-rose-400">{{ attempt.wrong_answers }}</p>
+        <p class="text-xs text-slate-400">Wrong</p>
+      </div>
+      <div class="rounded-2xl border-white/10 bg-slate-900/80 p-4 text-center">
+        <p class="text-2xl font-extrabold text-brand-300">{{ attempt.percentage }}%</p>
+        <p class="text-xs text-slate-400">Percentage</p>
+      </div>
+    </div>
+    <p class="text-xs text-slate-500 mb-8">Submitted: {{ attempt.submitted_at }}</p>
+
+    <h2 class="text-lg font-bold text-white mb-3">Question Review</h2>
+    <ol class="space-y-4">
+      {% for item in review %}
+      {% set options = [item.option_a, item.option_b, item.option_c, item.option_d] %}
+      <li class="rounded-2xl border-white/10 bg-slate-900/80 p-5">
+        <div class="flex items-start justify-between gap-3">
+          <p class="font-semibold text-white">{{ loop.index }}. {{ item.question_text }}</p>
+          {% if item.selected_answer is none %}
+          <span
+            class="shrink-0 px-2.5 py-1 rounded-lg bg-slate-700 text-slate-200 text-[11px] font-semibold">Unanswered</span>
+          {% elif item.is_correct %}
+          <span
+            class="shrink-0 px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 text-[11px] font-semibold">Correct</span>
+          {% else %}
+          <span
+            class="shrink-0 px-2.5 py-1 rounded-lg bg-rose-500/20 text-rose-300 text-[11px] font-semibold">Wrong</span>
+          {% endif %}
+        </div>
+        <ul class="mt-3 space-y-1 text-sm">
+          {% for option in options %}
+          {% set idx = loop.index0 %}
+          <li class="flex items-start gap-2
+          {% if idx == item.correct_answer %}text-emerald-300 font-semibold
+          {% elif idx == item.selected_answer %}text-rose-300
+          {% else %}text-slate-300{% endif %}">
+            <span class="font-mono">{{ letters[idx] }}.</span><span>{{ option }}</span>
+            {% if idx == item.correct_answer %}<span class="text-emerald-400">✓ correct answer</span>{% endif %}
+            {% if idx == item.selected_answer and idx != item.correct_answer %}<span class="text-rose-400">your
+              answer</span>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        <p class="mt-3 text-xs text-slate-400"><span class="font-semibold text-slate-300">Explanation:</span> {{
+          item.explanation }}</p>
+      </li>
+      {% endfor %}
+    </ol>
+
+    <div class="mt-8 flex-wrap gap-3">
+      <a href="{{ url_for('quiz_attempt_history') }}"
+        class="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-sm font-bold">My Quiz Attempts</a>
+      <a href="{{ url_for('quiz_create_page') }}"
+        class="px-4 py-2 rounded-lg border-white/10 hover:bg-white/5 text-slate-200 text-sm font-semibold">Generate
+        another quiz</a>
+    </div>
+  </div>
+</section>
+{% endblock %}

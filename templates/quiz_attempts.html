@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}My Quiz Attempts | NeuralForge StudyMate{% endblock %}
+{% block content %}
+<section class="min-h-[calc(100vh-140px)] py-16 px-4 sm:px-6 lg:px-8">
+  <div class="max-w-4xl mx-auto">
+    <div class="mb-8">
+      <span class="text-brand-300 text-xs font-bold">📊 HISTORY</span>
+      <h1 class="mt-2 text-3xl sm:text-4xl font-extrabold text-white">My Quiz Attempts</h1>
+      <p class="mt-2 text-slate-400">Review your past quiz results.</p>
+    </div>
+
+    {% if attempts %}
+    <div class="space-y-3">
+      {% for attempt in attempts %}
+      <article class="rounded-2xl border-white/10 bg-slate-900/80 p-5 flex-wrap items-center justify-between gap-4">
+        <div>
+          <p class="font-bold text-white">{{ attempt.title }}</p>
+          <div class="mt-1 flex-wrap gap-2 text-xs text-slate-400">
+            <span class="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono">{{ attempt.course_code
+              }}</span>
+            <span>Topic: {{ attempt.topic }}</span>
+            <span>· {{ attempt.submitted_at }}</span>
+          </div>
+        </div>
+        <div class="flex items-center gap-4">
+          <div class="text-right">
+            <p class="font-extrabold text-white">{{ attempt.percentage }}%</p>
+            <p class="text-xs text-slate-400">{{ attempt.correct_answers }}/{{ attempt.total_questions }} correct</p>
+          </div>
+          <a href="{{ url_for('quiz_attempt_result', attempt_id=attempt.id) }}"
+            class="px-3.5 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold">View Result</a>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="rounded-2xl border-white/10 bg-slate-900/40 p-12 text-center">
+      <div class="text-4xl mb-3">📊</div>
+      <h2 class="text-lg font-bold text-white">You haven't completed any quizzes yet.</h2>
+      <p class="mt-2 text-sm text-slate-400">Generate a quiz and try it out to see your results here.</p>
+      <a href="{{ url_for('quiz_create_page') }}"
+        class="mt-5 inline-block px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-sm font-bold">Generate
+        a Quiz</a>
+    </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

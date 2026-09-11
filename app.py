@@ -6,6 +6,11 @@ Step 4: PDF upload, text extraction, and AI summarization.
 import os
 import datetime
 import json
+import hmac
+import logging
+import secrets
+import time
+from collections import defaultdict
 from pathlib import Path
 from werkzeug.exceptions import HTTPException
 from dotenv import load_dotenv
@@ -17,11 +22,14 @@ load_dotenv()
 
 try:
     from services.pdf_processor import extract_text_from_pdf
-    from services.ai_service import generate_pdf_summary, generate_quiz_questions
+    from services.ai_service import generate_pdf_summary, generate_quiz_questions, answer_study_question
+    from services.rag_service import index_material, retrieve_context, NO_MATCH_ANSWER
+    from services.ai_service import generate_quiz_from_context
 except ImportError:
     from pdf_processor import extract_text_from_pdf
-    from services.ai_service import generate_pdf_summary, generate_quiz_questions
-
+    from services.ai_service import generate_pdf_summary, generate_quiz_questions, answer_study_question
+    from services.rag_service import index_material, retrieve_context, NO_MATCH_ANSWER
+    from services.ai_service import generate_quiz_from_context
 from database.db import (
     init_db,
     get_all_departments,
@@ -43,6 +51,28 @@ from database.db import (
     count_approved_study_materials,
     search_approved_study_materials,
     count_search_approved_study_materials,
+    search_approved_materials_for_qa,
+    save_material_chunks,
+    delete_material_chunks,
+    get_chunk_count,
+    get_material_extracted_text,
+    create_generated_quiz,
+    get_generated_quiz_for_user,
+    get_generated_quiz_questions,
+    get_generated_quiz_sources,
+    get_performance_overview,
+    get_performance_by_quiz,
+    get_performance_by_course,
+    get_performance_by_topic,
+    get_recent_performance,
+    get_quiz_questions_with_answers,
+    get_active_attempt,
+    create_generated_quiz_attempt,
+    get_attempt_for_user,
+    finalize_quiz_attempt,
+    get_attempt_answers,
+    get_user_quiz_attempts,
+    get_all_courses,
     add_bookmark,
     remove_bookmark,
     get_bookmarked_material_ids,
@@ -83,11 +113,23 @@ from services.auth_service import (
 
 app = Flask(__name__)
 
-# Security & Session Configuration (Step 6)
-app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-study-mate")
+# Security & Session Configuration (Step 15)
+_secret_key = os.environ.get("SECRET_KEY", "").strip()
+if not _secret_key:
+    _secret_key = secrets.token_urlsafe(32)
+    if os.environ.get("FLASK_ENV", "development").lower() == "production":
+        raise RuntimeError("SECRET_KEY must be configured in production.")
+app.secret_key = _secret_key
 app.config["PERMANENT_SESSION_LIFETIME"] = datetime.timedelta(days=7)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = os.environ.get("SESSION_COOKIE_SECURE", "0").lower() in ("1", "true", "yes")
+_production_mode = os.environ.get("FLASK_ENV", "development").lower() == "production"
+app.config["CSRF_PROTECTION"] = os.environ.get("CSRF_PROTECTION", "1").lower() not in ("0", "false", "no")
+app.config["JSON_SORT_KEYS"] = False
+logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper())
+logger = logging.getLogger("studymate")
+_rate_buckets = defaultdict(list)
 
 # Base configuration
 BASE_DIR = Path(__file__).resolve().parent
@@ -129,19 +171,75 @@ with app.app_context():
 app.config["UPLOAD_FOLDER"] = str(UPLOAD_FOLDER)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 @app.context_processor
-def notification_context():
-    # Expose only the current user's unread notification count to templates."
+def security_context():
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_urlsafe(32)
     user_id = session.get("user_id")
-    return {"unread_notification_count": count_unread_notifications(user_id) if user_id else 0}
+    return {
+        "csrf_token": session["csrf_token"],
+        "unread_notification_count": count_unread_notifications(user_id) if user_id else 0,
+    }
+
+
+def _csrf_valid():
+    supplied = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token")
+    expected = session.get("csrf_token")
+    return bool(supplied and expected and hmac.compare_digest(str(supplied), str(expected)))
+
+@app.before_request
+def protect_state_changing_requests():
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_urlsafe(32)
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        return None
+    if not app.config.get("CSRF_PROTECTION", True) or app.config.get("TESTING"):
+        return None
+    if request.endpoint in {"upload_pdf", "summarize_text"} and request.is_json:
+        return None
+    if request.endpoint in {"quiz_generate_api", "quiz_submit_api"} and request.is_json:
+        # Auth + rate-limit protected JSON APIs; the UI also sends X-CSRF-Token.
+        return None
+    if not _csrf_valid():
+        logger.warning("CSRF validation failed for %s", request.path)
+        return jsonify({"success": False, "error": "Invalid or missing security token."}), 400
+    return None
+@app.after_request
+def add_security_headers(response):
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    return response
 
 ALLOWED_EXTENSIONS = {"pdf"}
 
 
 def is_allowed_pdf(filename: str) -> bool:
     """Check if the uploaded file has a valid .pdf extension."""
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+    return bool(filename) and "\x00" not in filename and "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def _has_pdf_signature(file_storage) -> bool:
+        # Reject files that do not begin with the PDF magic signature."
+        try:
+            position = file_storage.stream.tell()
+            signature = file_storage.stream.read(5)
+            file_storage.stream.seek(position)
+            return signature == b"%PDF-"
+        except (AttributeError, OSError):
+            return False
 
+def _rate_limited(bucket: str, limit: int, window_seconds: int = 60) -> bool:
+        if app.config.get("TESTING"):
+            return False
+        now = time.monotonic()
+        key = f"{bucket}:{request.remote_addr or 'unknown'}"
+        recent = [stamp for stamp in _rate_buckets[key] if now - stamp < window_seconds]
+        if len(recent) >= limit:
+            _rate_buckets[key] = recent
+            return True
+        recent.append(now)
+        _rate_buckets[key] = recent
+        return False
 @app.route("/")
 def home():
     """Home route - shows landing page with PDF upload studio."""
@@ -155,6 +253,8 @@ def upload_pdf():
     and PDF file, saves to uploads/ folder, and extracts text using pypdf.
     Returns JSON response with success status, course metadata, and extracted text preview.
     """
+    if _rate_limited("public-upload", 10):
+        return jsonify({"success": False, "error": "Too many upload requests. Please try again later."}), 429
     # 1. Validate Course Metadata
     course_name = (request.form.get("course_name") or "").strip()
     course_code = (request.form.get("course_code") or "").strip()
@@ -195,12 +295,11 @@ def upload_pdf():
         }), 400
 
     # 4. Verify PDF extension
-    if not is_allowed_pdf(file.filename):
+    if not is_allowed_pdf(file.filename) or not _has_pdf_signature(file):
         return jsonify({
             "success": False,
-            "error": "Invalid file type. Only PDF files (.pdf) are accepted."
+            "error": "Invalid file type. Only valid PDF files (.pdf) are accepted."
         }), 400
-
     # 5. Secure filename and save
     original_filename = file.filename
     clean_filename = secure_filename(original_filename)
@@ -235,10 +334,11 @@ def upload_pdf():
             "text": extraction["text"]
         }), 200
 
-    except Exception as exc:
+    except Exception:
+        logger.exception("Public PDF processing failed")
         return jsonify({
             "success": False,
-            "error": f"Failed to process PDF: {str(exc)}"
+            "error": "The PDF could not be processed safely."
         }), 500
 
 
@@ -283,10 +383,11 @@ def summarize_text():
             "success": False,
             "error": str(val_err)
         }), 400
-    except Exception as exc:
+    except Exception:
+        logger.exception("AI summary request failed")
         return jsonify({
             "success": False,
-            "error": f"AI service failed: {str(exc)}"
+            "error": "The AI service is temporarily unavailable."
         }), 500
 
 
@@ -347,6 +448,8 @@ def login():
         return redirect(url_for("home"))
 
     if request.method == "POST":
+        if _rate_limited("login", 10):
+            return jsonify({"success": False, "error": "Too many login attempts. Please try again later."}), 429
         email = request.form.get("email", "").strip()
         password = request.form.get("password", "")
 
@@ -449,8 +552,8 @@ def upload_study_material():
             return handle_error("No file selected. Please choose a PDF file.")
 
         # 7. Validate PDF extension
-        if not is_allowed_pdf(file.filename):
-            return handle_error("Invalid file type. Only PDF files (.pdf) are accepted.")
+        if not is_allowed_pdf(file.filename) or not _has_pdf_signature(file):
+            return handle_error("Invalid file type. Only valid PDF files (.pdf) are accepted.")
 
         # 8. Check file size (16 MB limit)
         file.seek(0, os.SEEK_END)
@@ -476,7 +579,8 @@ def upload_study_material():
             file.save(str(destination_path))
 
             # Verify PDF extraction using existing pdf_processor
-            extract_text_from_pdf(destination_path)
+            extraction = extract_text_from_pdf(destination_path)
+            extracted_text = (extraction.get("text") or "").strip()
 
             # 10. Save study_materials record into database
             # uploaded_by comes strictly from session; status is strictly 'pending'
@@ -486,8 +590,13 @@ def upload_study_material():
                 exam_type=exam_type,
                 file_path=f"uploads/{destination_path.name}",
                 uploaded_by=session["user_id"],
-                status="pending"
+                status="pending",
+                extracted_text=extracted_text[:QNA_TEXT_STORE_LIMIT]
             )
+
+            # Step 11: build the RAG chunk index now so approval needs no re-scan.
+            if extracted_text:
+                index_material(material_id)
 
             success_message = "Study material submitted successfully."
             status_message = "Status: Pending Approval"
@@ -569,6 +678,8 @@ def quiz_create(material_id):
 @app.route("/quiz/generate/<int:material_id>", methods=["POST"])
 @login_required
 def quiz_generate(material_id):
+    if _rate_limited("quiz-generation", 10):
+        return _quiz_error("Too many quiz generation requests. Please try again later.", 429)
     material = get_study_material_details(material_id)
     content = _approved_material_content(material)
     if not material or material["status"] != "approved" or not content:
@@ -648,6 +759,354 @@ def quiz_result(quiz_id, attempt_id):
     review = get_attempt_review(attempt_id)
     return render_template("quiz_result.html", quiz=quiz, attempt=attempt, review=review)
 
+# ===========================================================================
+# Step 12: AI Quiz Generator (generation + storage only; Step 13 attempts it)
+# ===========================================================================
+
+QUIZ_GEN_COUNTS = (5, 10, 15, 20)
+QUIZ_GEN_DIFFICULTIES = {"easy", "medium", "hard", "mixed"}
+QUIZ_GEN_EXAM_TYPES = {"midterm", "final", "both"}
+QUIZ_GEN_MAX_TOPIC = 120
+
+def _quiz_json_error(message, status=400):
+    return jsonify({"success": False, "error": message}), status
+
+def _build_quiz_title(course_name, topic):
+    # Titles are stored/rendered as text (auto-escaped in templates), never raw HTML.
+    safe_topic = (topic or "General").strip()[:QUIZ_GEN_MAX_TOPIC] or "General"
+    safe_course = (course_name or "Study").strip() or "Study"
+    return safe_course + " \u2014 " + safe_topic + " Quiz"
+
+@app.route("/quiz/create", methods=["GET"])
+@login_required
+def quiz_create_page():
+    # Course selector is limited to the student's department (admins: all courses).
+    user = get_user_by_id(session["user_id"])
+    is_admin = session.get("user_role") == "admin"
+    if is_admin:
+        courses = get_all_courses()
+    else:
+        courses = get_courses_by_department(user["department_id"]) if user and user["department_id"] else []
+    return render_template(
+        "quiz_create_ai.html",
+        courses=courses,
+        question_counts=QUIZ_GEN_COUNTS,
+        difficulties=["easy", "medium", "hard", "mixed"],
+        exam_types=["midterm", "final", "both"],
+    )
+
+@app.route("/api/quizzes/generate", methods=["POST"])
+@login_required
+def quiz_generate_api():
+    # Server-side validation: never trust the browser's course/topic/exam values.
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _quiz_json_error("Invalid request body.", 400)
+
+    if _rate_limited("quiz-generation", 10):
+        return _quiz_json_error("Too many quiz generation requests. Please try again later.", 429)
+
+    raw_course = data.get("course_id")
+    topic = (data.get("topic") or "").strip()[:QUIZ_GEN_MAX_TOPIC]
+    exam_type = (data.get("exam_type") or "").strip().lower()
+    difficulty = (data.get("difficulty") or "").strip().lower()
+    raw_count = data.get("number_of_questions")
+
+    # Validate course id and department ownership/validity.
+    try:
+        course_id = int(raw_course)
+    except (TypeError, ValueError):
+        return _quiz_json_error("Please select a valid course.", 400)
+    course = get_course_by_id(course_id)
+    if not course:
+        return _quiz_json_error("Selected course does not exist.", 400)
+    user = get_user_by_id(session["user_id"])
+    if session.get("user_role") != "admin":
+        if not user or not user["department_id"] or course["department_id"] != user["department_id"]:
+            return _quiz_json_error("You can only generate quizzes for courses in your department.", 403)
+
+    if exam_type not in QUIZ_GEN_EXAM_TYPES:
+        return _quiz_json_error("Invalid exam type selected.", 400)
+    if difficulty not in QUIZ_GEN_DIFFICULTIES:
+        return _quiz_json_error("Invalid difficulty selected.", 400)
+    try:
+        number_of_questions = int(raw_count)
+    except (TypeError, ValueError):
+        return _quiz_json_error("Invalid number of questions.", 400)
+    if number_of_questions not in QUIZ_GEN_COUNTS:
+        return _quiz_json_error("Number of questions must be 5, 10, 15, or 20.", 400)
+    if not topic:
+        return _quiz_json_error("Please enter a topic for the quiz.", 400)
+
+    # Step 11 RAG: the TOPIC drives relevance over approved-only chunks. If the
+    # topic yields nothing relevant we never fall back to a generic quiz.
+    department_id = user["department_id"] if user else None
+    rag = retrieve_context(topic, department_id, top_k=RAG_TOP_K,
+                           max_context_chars=QNA_CONTEXT_CHAR_LIMIT)
+    if not rag["has_relevant"]:
+        return _quiz_json_error(
+            "Not enough approved study material is available for this topic. "
+            "Please choose another topic or wait for more materials to be approved.", 404
+        )
+
+    course_name = course["course_name"]
+    try:
+        questions = generate_quiz_from_context(
+            rag["context"], number_of_questions, difficulty,
+            course_name=course_name, topic=topic,
+        )
+    except ValueError as exc:
+        return _quiz_json_error(str(exc), 503)
+    except Exception:
+        logger.exception("Quiz generation failed")
+        return _quiz_json_error("Quiz generation failed. Please try again later.", 500)
+
+    source_ids = [item["material_id"] for item in rag["sources"]]
+    title = _build_quiz_title(course_name, topic)
+    try:
+        quiz_id = create_generated_quiz(
+            session["user_id"], course_id, title, topic, exam_type,
+            difficulty, questions, source_material_ids=source_ids,
+        )
+    except Exception:
+        logger.exception("Saving generated quiz failed")
+        return _quiz_json_error("Quiz could not be saved. Please try again later.", 500)
+
+    return jsonify({
+        "success": True,
+        "quiz_id": quiz_id,
+        "title": title,
+        "question_count": len(questions),
+    }), 201
+@app.route("/quiz/view/<int:quiz_id>", methods=["GET"])
+@login_required
+def quiz_preview(quiz_id):
+    # Ownership-scoped preview (prevents IDOR). Attempts/submission are Step 13.
+    quiz = get_generated_quiz_for_user(quiz_id, session["user_id"])
+    if not quiz:
+        abort(404)
+    questions = get_generated_quiz_questions(quiz_id)
+    sources = get_generated_quiz_sources(quiz_id)
+    return render_template("quiz_preview.html", quiz=quiz, questions=questions, sources=sources)
+
+# ===========================================================================
+# Step 13: Quiz Attempt + Result System
+# ===========================================================================
+
+MAX_QUIZ_ANSWER_PAYLOAD = 200  # reject oversized answer maps fail-safe
+@app.route("/quiz/take/<int:quiz_id>", methods=["GET"])
+@login_required
+def quiz_take_page(quiz_id):
+    # Ownership-scoped: students only take their own generated quizzes.
+    quiz = get_generated_quiz_for_user(quiz_id, session["user_id"])
+    if not quiz:
+        abort(404)
+    questions = get_quiz_questions_with_answers(quiz_id)
+    if not questions:
+        abort(404)
+
+    # Establish (or reuse) a single in-progress attempt so refreshes don't spam rows.
+    attempt = get_active_attempt(quiz_id, session["user_id"])
+    if not attempt:
+        attempt_id = create_generated_quiz_attempt(quiz_id, session["user_id"], len(questions))
+    else:
+        attempt_id = attempt["id"]
+
+    # SECURITY: never send correct_answer / explanation to the browser pre-submission.
+    safe_questions = [
+        {
+            "id": q["id"],
+            "question_text": q["question_text"],
+            "options": [q["option_a"], q["option_b"], q["option_c"], q["option_d"]],
+        }
+        for q in questions
+    ]
+    return render_template(
+        "quiz_take.html",
+        quiz=quiz,
+        questions=safe_questions,
+        attempt_id=attempt_id,
+    )
+
+@app.route("/api/quizzes/<int:quiz_id>/submit", methods=["POST"])
+@login_required
+def quiz_submit_api(quiz_id):
+    # Server-side scoring only. Client score/correct answers are never trusted.
+    user_id = session["user_id"]
+    quiz = get_generated_quiz_for_user(quiz_id, user_id)
+    if not quiz:
+        return _quiz_json_error("Quiz not found.", 404)
+    if _rate_limited("quiz-submit", 20):
+        return _quiz_json_error("Too many submissions. Please try again later.", 429)
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _quiz_json_error("Invalid request body.", 400)
+    answers = data.get("answers")
+    if not isinstance(answers, dict):
+        return _quiz_json_error("Answers must be provided as an object.", 400)
+    if len(answers) > MAX_QUIZ_ANSWER_PAYLOAD:
+        return _quiz_json_error("Submitted answers exceed the allowed size.", 413)
+
+    questions = get_quiz_questions_with_answers(quiz_id)
+    if not questions:
+        return _quiz_json_error("This quiz has no questions to score.", 400)
+    valid_ids = {q["id"] for q in questions}
+
+    # Validate and normalize each answer. Unknown questions are ignored safely.
+    selected_answers = {}
+    for raw_id, raw_value in answers.items():
+        try:
+            qid = int(raw_id)
+        except (TypeError, ValueError):
+            return _quiz_json_error("Invalid question identifier in submission.", 400)
+        if qid not in valid_ids:
+            continue  # ignore unknown/foreign question ids
+        # Answer index must be a real int 0-3 (reject str, float, bool).
+        if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+            return _quiz_json_error("Answer selections must be integers between 0 and 3.", 400)
+        if not 0 <= raw_value <= 3:
+            return _quiz_json_error("Answer selections must be between 0 and 3.", 400)
+        # Duplicate question ids are impossible in a JSON object; last write wins safely.
+        selected_answers[qid] = raw_value
+    # The active attempt for this quiz (created on the take page).
+    attempt = get_active_attempt(quiz_id, user_id)
+    if not attempt:
+        return _quiz_json_error("No active attempt found for this quiz.", 400)
+
+    try:
+        result = finalize_quiz_attempt(attempt["id"], user_id, questions, selected_answers)
+    except ValueError as exc:
+        return _quiz_json_error(str(exc), 409)
+    except Exception:
+        logger.exception("Quiz submission failed")
+        return _quiz_json_error("Quiz submission failed. Please try again later.", 500)
+
+    result["success"] = True
+    return jsonify(result), 200
+@app.route("/quiz/result/<int:attempt_id>", methods=["GET"])
+@login_required
+def quiz_attempt_result(attempt_id):
+    # Ownership-scoped; unknown/foreign attempts return a safe 404.
+    attempt = get_attempt_for_user(attempt_id, session["user_id"])
+    if not attempt or not attempt["submitted_at"]:
+        abort(404)
+    review = get_attempt_answers(attempt_id)
+    return render_template("quiz_attempt_result.html", attempt=attempt, review=review,
+                           letters=["A", "B", "C", "D"])
+
+@app.route("/quiz/attempts", methods=["GET"])
+@login_required
+def quiz_attempt_history():
+    attempts = get_user_quiz_attempts(session["user_id"])
+    return render_template("quiz_attempts.html", attempts=attempts)
+
+# ===========================================================================
+# Step 14: Quiz Performance Analysis
+# ===========================================================================
+
+def _collect_performance(user_id):
+    # Single source of truth for analytics: always scoped to the session user.
+    return {
+        "overview": get_performance_overview(user_id),
+        "quiz_performance": get_performance_by_quiz(user_id),
+        "course_performance": get_performance_by_course(user_id),
+        "topic_performance": get_performance_by_topic(user_id),
+        "recent_performance": get_recent_performance(user_id, limit=10),
+    }
+
+@app.route("/quiz/performance", methods=["GET"])
+@login_required
+def quiz_performance_page():
+    # User id always comes from the authenticated session (no client override).
+    data = _collect_performance(session["user_id"])
+    return render_template("quiz_performance.html", **data)
+
+@app.route("/api/quiz/performance", methods=["GET"])
+@login_required
+def quiz_performance_api():
+    # Safe JSON analytics for the logged-in user only; no answer keys exposed.
+    data = _collect_performance(session["user_id"])
+    return jsonify({"success": True, **data}), 200
+
+# ===========================================================================
+# Step 10: Ask StudyMate / grounded Q&A
+# ===========================================================================
+
+# Configurable safe limits for Q&A (Step 11 will replace retrieval with RAG).
+QNA_MAX_QUESTION_CHARS = int(os.environ.get("QNA_MAX_QUESTION_CHARS", "2000"))
+QNA_CONTEXT_CHAR_LIMIT = int(os.environ.get("QNA_CONTEXT_CHAR_LIMIT", "12000"))
+QNA_TEXT_STORE_LIMIT = int(os.environ.get("QNA_TEXT_STORE_LIMIT", "200000"))
+RAG_TOP_K = int(os.environ.get("RAG_TOP_K", "5"))  # Step 11 retrieved chunk count
+
+
+def _qna_error(message, status):
+    return jsonify({"success": False, "error": message}), status
+@app.route("/ask-studymate", methods=["GET"])
+@login_required
+def ask_studymate():
+    # Authenticated page; answers are grounded in approved materials only.
+    return render_template("ask_studymate.html")
+
+@app.route("/api/ask-studymate", methods=["POST"])
+@login_required
+def ask_studymate_api():
+    # Server-side validation: never trust client-side checks alone.
+    data = request.get_json(silent=True)
+    question = data.get("question") if isinstance(data, dict) else ""
+    question = question.strip() if isinstance(question, str) else ""
+    if not question:
+        return _qna_error("Please enter a question.", 400)
+    if len(question) > QNA_MAX_QUESTION_CHARS:
+        return _qna_error("Question must be " + format(QNA_MAX_QUESTION_CHARS, ",") + " characters or fewer.", 400)
+    if _rate_limited("ask-studymate", 20):
+        return _qna_error("Too many questions sent. Please try again in a minute.", 429)
+    user = get_user_by_id(session["user_id"])
+    # Step 11: RAG pipeline — approved-only retrieval + bounded context builder.
+    rag = retrieve_context(
+        question,
+        user["department_id"] if user else None,
+        top_k=RAG_TOP_K,
+        max_context_chars=QNA_CONTEXT_CHAR_LIMIT,
+    )
+
+    # Confidence gate: don't call the AI with unrelated/unapproved context.
+    if not rag["has_relevant"]:
+        return jsonify({
+            "success": True,
+            "question": question,
+            "answer": NO_MATCH_ANSWER,
+            "sources": [],
+            "retrieved_chunks": 0,
+        }), 200
+    sources = [
+        {
+            "material_id": item["material_id"],
+            "course_name": item["course_name"],
+            "course_code": item["course_code"],
+            "topic": item["topic"],
+            "exam_type": item["exam_type"],
+            "library_url": url_for("study_library", q=item["topic"]),
+        }
+        for item in rag["sources"]
+    ]
+
+    try:
+        result = answer_study_question(question, rag["context"])
+    except ValueError as exc:
+        # User-friendly, non-leaking AI error (missing key, rate limit, outage, etc.)
+        return _qna_error(str(exc), 503)
+    except Exception:
+        logger.exception("Ask StudyMate request failed")
+        return _qna_error("StudyMate is temporarily unavailable. Please try again later.", 500)
+    return jsonify({
+        "success": True,
+        "question": question,
+        "answer": result["answer"],
+        "sources": sources,
+        "retrieved_chunks": rag["chunk_count"],
+        "context_truncated": rag["truncated"],
+    }), 200
 # ===========================================================================
 # Step 9: Public Study Notes Library Routes
 # ===========================================================================
@@ -906,6 +1365,13 @@ def admin_approve_material(material_id: int):
 
     changed = update_study_material_status(material_id, "approved")
     if changed:
+        # Step 11: ensure chunks exist for retrieval; re-index only if missing
+        # (upload already indexed usable text, so this avoids duplication).
+        try:
+            if get_chunk_count(material_id) == 0:
+                index_material(material_id)
+        except Exception:
+            logger.exception("Chunk indexing on approval failed for material %s", material_id)
         notify_material_approved(material["uploaded_by"], material_id, material["topic"])
 
     if _admin_wants_json():
@@ -950,6 +1416,13 @@ def admin_reject_material(material_id: int):
     flash(f"'{material['topic']}' rejected successfully.", "info")
     return redirect(url_for("admin_dashboard"))
 
+
+@app.route("/logout", methods=["POST"])
+@login_required
+def logout_post():
+    logout_session()
+    flash("You have been successfully logged out.", "info")
+    return redirect(url_for("login"))
 
 @app.route("/logout", methods=["GET"])
 def logout():
@@ -999,6 +1472,31 @@ def admin_verify():
         "user": current_user
     }), 200
 
+
+def _safe_error_response(message, status_code):
+    if request.is_json or request.path.startswith(("/api", "/summarize", "/upload")):
+        return jsonify({"success": False, "error": message, "status": status_code}), status_code
+    return render_template("error.html", message=message, status_code=status_code), status_code
+@app.errorhandler(400)
+def bad_request(error):
+    return _safe_error_response("The request could not be processed.", 400)
+
+@app.errorhandler(404)
+def not_found(error):
+    return _safe_error_response("The requested page was not found.", 404)
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+    return _safe_error_response("This method is not allowed.", 405)
+
+@app.errorhandler(429)
+def too_many_requests(error):
+    return _safe_error_response("Too many requests. Please try again later.", 429)
+
+@app.errorhandler(500)
+def internal_error(error):
+    logger.exception("Unhandled application error")
+    return _safe_error_response("An internal error occurred. Please try again later.", 500)
 
 @app.errorhandler(403)
 def forbidden_access(error):

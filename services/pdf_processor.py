@@ -19,8 +19,8 @@ def extract_text_from_pdf(file_path: str | Path) -> dict:
                  "pages": list[dict]
              }
     """
-    path_obj = Path(file_path)
-    if not path_obj.exists():
+    path_obj = Path(file_path).resolve()
+    if path_obj.suffix.lower() != ".pdf" or not path_obj.exists() or not path_obj.is_file():
         raise FileNotFoundError(f"PDF file not found at: {file_path}")
 
     reader = PdfReader(str(path_obj))

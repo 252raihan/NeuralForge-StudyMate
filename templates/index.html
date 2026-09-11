@@ -51,7 +51,7 @@
 
     <!-- Upload Card -->
     <div class="rounded-2xl border border-white/10 bg-white/[0.03] p-6 sm:p-8 backdrop-blur shadow-2xl shadow-brand-950/50">
-      <form id="pdf-upload-form" novalidate class="space-y-6">
+      <form id="pdf-upload-form" novalidate class="space-y-6"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <!-- Metadata Fields -->
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>

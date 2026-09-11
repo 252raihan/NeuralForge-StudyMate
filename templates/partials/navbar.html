@@ -13,6 +13,10 @@
         <a href="{{ url_for('study_library') }}" id="nav-study-library" class="text-slate-300 hover:text-white transition">📚 Study Library</a>
         {% if session.get('user_id') %}
           <a href="{{ url_for('dashboard') }}" id="nav-dashboard-link" class="text-slate-300 hover:text-white transition">🏠 Dashboard</a>
+          <a href="{{ url_for('ask_studymate') }}" id="nav-ask-studymate-link" class="text-brand-300 hover:text-white transition font-semibold">🧠 Ask StudyMate</a>
+          <a href="{{ url_for('quiz_create_page') }}" id="nav-quiz-create-link" class="text-slate-300 hover:text-white transition">📝 Generate Quiz</a>
+          <a href="{{ url_for('quiz_attempt_history') }}" id="nav-quiz-attempts-link" class="text-slate-300 hover:text-white transition">📊 My Quiz Attempts</a>
+          <a href="{{ url_for('quiz_performance_page') }}" id="nav-quiz-performance-link" class="text-slate-300 hover:text-white transition">📈 Performance</a>
           <a href="{{ url_for('notifications') }}" id="nav-notifications-link" class="text-slate-300 hover:text-white transition">🔔 Notifications{% if unread_notification_count %} <span class="rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] text-white">{{ unread_notification_count }}</span>{% endif %}</a>
           <a href="{{ url_for('upload_study_material') }}" class="text-brand-300 hover:text-white transition font-semibold">Upload Material</a>
           <a href="{{ url_for('my_study_materials') }}" class="text-slate-300 hover:text-white transition">My Materials</a>
@@ -37,9 +41,9 @@
               <span class="px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono text-[10px] font-bold">ADMIN</span>
             {% endif %}
           </div>
-          <a href="{{ url_for('logout') }}" id="nav-logout-btn" class="hidden sm:inline-flex px-3.5 py-1.5 rounded-lg border border-white/10 hover:bg-white/5 text-slate-300 hover:text-white text-xs font-semibold transition">
+          <form method="POST" action="{{ url_for('logout_post') }}" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" id="nav-logout-btn" class="hidden sm:inline-flex px-3.5 py-1.5 rounded-lg border border-white/10 hover:bg-white/5 text-slate-300 hover:text-white text-xs font-semibold transition">
             Log out
-          </a>
+          </button></form>
         {% else %}
           <!-- Logged Out Links -->
           <a href="{{ url_for('login') }}" id="nav-login-btn" class="hidden sm:inline-flex text-xs font-semibold text-slate-300 hover:text-white transition px-2 py-1">
@@ -70,6 +74,10 @@
     <a href="{{ url_for('study_library') }}" class="block px-3 py-2 rounded-lg text-slate-300 hover:bg-white/5 hover:text-white transition">📚 Study Library</a>
     {% if session.get('user_id') %}
       <a href="{{ url_for('dashboard') }}" id="nav-dashboard-link-mobile" class="block px-3 py-2 rounded-lg text-slate-300 hover:bg-white/5 transition">🏠 Dashboard</a>
+      <a href="{{ url_for('ask_studymate') }}" class="block px-3 py-2 rounded-lg text-brand-300 hover:bg-white/5 font-semibold transition">🧠 Ask StudyMate</a>
+      <a href="{{ url_for('quiz_create_page') }}" class="block px-3 py-2 rounded-lg text-slate-300 hover:bg-white/5 transition">📝 Generate Quiz</a>
+      <a href="{{ url_for('quiz_attempt_history') }}" class="block px-3 py-2 rounded-lg text-slate-300 hover:bg-white/5 transition">📊 My Quiz Attempts</a>
+      <a href="{{ url_for('quiz_performance_page') }}" class="block px-3 py-2 rounded-lg text-slate-300 hover:bg-white/5 transition">📈 Performance</a>
       <a href="{{ url_for('notifications') }}" id="nav-notifications-link-mobile" class="block px-3 py-2 rounded-lg text-slate-300 hover:bg-white/5 transition">🔔 Notifications{% if unread_notification_count %} ({{ unread_notification_count }}){% endif %}</a>
       <a href="{{ url_for('upload_study_material') }}" class="block px-3 py-2 rounded-lg text-brand-300 hover:bg-white/5 font-semibold transition">Upload Study Material</a>
       <a href="{{ url_for('my_study_materials') }}" class="block px-3 py-2 rounded-lg text-slate-300 hover:bg-white/5 transition">My Study Materials</a>
@@ -88,7 +96,7 @@
           <span class="px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono text-[10px] font-bold">ADMIN</span>
         {% endif %}
       </div>
-      <a href="{{ url_for('logout') }}" class="block px-3 py-2 rounded-lg text-rose-300 hover:bg-rose-500/10 font-semibold transition">Log out</a>
+      <form method="POST" action="{{ url_for('logout_post') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="block w-full text-left px-3 py-2 rounded-lg text-rose-300 hover:bg-rose-500/10 font-semibold transition">Log out</button></form>
     {% else %}
       <div class="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
         <a href="{{ url_for('login') }}" class="block px-3 py-2 rounded-lg text-center text-slate-200 bg-slate-900 hover:bg-slate-800 font-semibold text-xs transition">Log in</a>

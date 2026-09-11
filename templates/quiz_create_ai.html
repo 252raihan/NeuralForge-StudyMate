@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Generate AI Quiz | NeuralForge StudyMate{% endblock %}
+{% block content %}
+<section class="min-h-[calc(100vh-140px)] py-16 px-4 sm:px-6 lg:px-8">
+  <div class="max-w-3xl mx-auto">
+    <div class="mb-8"><span class="text-brand-300 text-xs font-bold">🧠 AI QUIZ GENERATOR</span>
+      <h1 class="mt-2 text-3xl sm:text-4xl font-extrabold text-white">Generate a Quiz</h1>
+      <p class="mt-2 text-slate-400">Build an AI quiz grounded in administrator-approved study materials.</p>
+    </div>
+
+    <form id="quiz-form" class="rounded-2xl border-white/10 bg-slate-900/80 p-5 sm:p-7 space-y-5">
+      <div>
+        <label for="course" class="block text-sm font-semibold text-white">Course</label>
+        <select id="course" name="course_id" class="form-select w-full mt-2">
+          <option value="">Select a course…</option>
+          {% for course in courses %}
+          <option value="{{ course.id }}">{{ course.course_code }} — {{ course.course_name }}</option>
+          {% endfor %}
+        </select>
+        {% if not courses %}<p class="mt-2 text-xs text-amber-300">No courses are available for your department yet.</p>
+        {% endif %}
+      </div>
+      <div>
+        <label for="topic" class="block text-sm font-semibold text-white">Topic / Chapter</label>
+        <input id="topic" name="topic" maxlength="120" placeholder="e.g. Normalization" class="form-input w-full mt-2">
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div>
+          <label for="exam_type" class="block text-sm font-semibold text-white">Exam Type</label>
+          <select id="exam_type" name="exam_type" class="form-select w-full mt-2">
+            {% for exam in exam_types %}<option value="{{ exam }}" {% if exam=='midterm' %}selected{% endif %}>{{
+              exam|capitalize }}</option>{% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="number_of_questions" class="block text-sm font-semibold text-white">Questions</label>
+          <select id="number_of_questions" name="number_of_questions" class="form-select w-full mt-2">
+            {% for count in question_counts %}<option value="{{ count }}" {% if count==5 %}selected{% endif %}>{{ count
+              }}</option>{% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="difficulty" class="block text-sm font-semibold text-white">Difficulty</label>
+          <select id="difficulty" name="difficulty" class="form-select w-full mt-2">
+            {% for level in difficulties %}<option value="{{ level }}" {% if level=='medium' %}selected{% endif %}>{{
+              level|capitalize }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <button id="generate-btn" type="submit"
+          class="px-5 py-2.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-sm font-bold">Generate
+          Quiz</button>
+        <span id="loading" class="hidden text-sm text-brand-300">Generating your quiz… this can take a few
+          seconds.</span>
+      </div>
+      <p id="error" class="hidden rounded-lg bg-rose-500/10 p-3 text-sm text-rose-300"></p>
+    </form>
+
+    <div class="mt-6 rounded-2xl border-white/10 bg-slate-900/40 p-6 text-sm text-slate-400">
+      Quizzes are generated <strong class="text-slate-200">only</strong> from approved materials in your department.
+      Unapproved materials are never used.
+    </div>
+  </div>
+</section>
+<script>
+  const form = document.getElementById('quiz-form'), btn = document.getElementById('generate-btn'),
+    loading = document.getElementById('loading'), error = document.getElementById('error');
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    error.classList.add('hidden');
+    const payload = {
+      course_id: document.getElementById('course').value,
+      topic: document.getElementById('topic').value.trim(),
+      exam_type: document.getElementById('exam_type').value,
+      number_of_questions: document.getElementById('number_of_questions').value,
+      difficulty: document.getElementById('difficulty').value
+    };
+    if (!payload.course_id) { error.textContent = 'Please select a course.'; error.classList.remove('hidden'); return; }
+    if (!payload.topic) { error.textContent = 'Please enter a topic.'; error.classList.remove('hidden'); return; }
+    btn.disabled = true; loading.classList.remove('hidden');
+    try {
+      const response = await fetch('{{ url_for("quiz_generate_api") }}', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': '{{ csrf_token }}' },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Quiz generation failed. Please try again.');
+      window.location.href = '/quiz/view/' + data.quiz_id;
+    } catch (err) {
+      error.textContent = err.message; error.classList.remove('hidden');
+    } finally {
+      btn.disabled = false; loading.classList.add('hidden');
+    }
+  });
+</script>
+{% endblock %}

@@ -38,6 +38,9 @@ def init_db(db_path: Optional[Path] = None) -> None:
     conn = get_db_connection(db_path)
     try:
         conn.executescript(schema_sql)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(study_materials)")}
+        if "extracted_text" not in columns:
+            conn.execute("ALTER TABLE study_materials ADD COLUMN extracted_text TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -142,9 +145,9 @@ def create_course(
         cursor.execute(
             """
             INSERT INTO courses (department_id, course_name, course_code)
-            VALUES (?, ?, ?)
+            VALUES (:dept, :name, :code)
             """,
-            (department_id, course_name.strip(), course_code.strip())
+            {"dept": department_id, "name": course_name.strip(), "code": course_code.strip()}
         )
         conn.commit()
         return cursor.lastrowid
@@ -328,6 +331,7 @@ def create_study_material(
     file_path: str,
     uploaded_by: int,
     status: str = "pending",
+    extracted_text: Optional[str] = None,
     conn: Optional[sqlite3.Connection] = None
 ) -> int:
     """
@@ -358,8 +362,14 @@ def create_study_material(
             """,
             (course_id, topic.strip(), exam_type, file_path.strip(), uploaded_by, status)
         )
+        material_id = cursor.lastrowid
+        # Store extracted PDF text separately (named parameter avoids placeholder limits).
+        cursor.execute(
+            "UPDATE study_materials SET extracted_text = :text WHERE id = :mid",
+            {"text": extracted_text, "mid": material_id},
+        )
         conn.commit()
-        return cursor.lastrowid
+        return material_id
     finally:
         if close_on_exit:
             conn.close()
@@ -425,6 +435,595 @@ def get_study_materials_by_user(
         if close_on_exit:
             conn.close()
 
+
+def search_approved_materials_for_qa(question: str, department_id: Optional[int] = None,
+                                     limit: int = 5, context_limit: int = 12000,
+                                     conn: Optional[sqlite3.Connection] = None) -> List[Dict[str, Any]]:
+    # Retrieve only approved, keyword-ranked material for Q&A.
+    import re as _re
+    raw_terms = _re.findall(r"[A-Za-z0-9]+", (question or "").casefold())
+    stop = {"the", "what", "how", "why", "and", "for", "are", "with", "does", "can", "explain", "define", "tell", "about", "from"}
+    terms = [t for t in raw_terms if len(t) > 2 and t not in stop][:12]
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        rows = conn.execute(
+            '''SELECT sm.id, sm.topic, sm.exam_type, sm.extracted_text,
+                      c.course_name, c.course_code, c.department_id
+               FROM study_materials sm JOIN courses c ON sm.course_id = c.id
+               WHERE sm.status = 'approved' AND sm.extracted_text IS NOT NULL
+               ORDER BY sm.id DESC LIMIT 200'''
+        ).fetchall()
+        ranked = []
+        for row in rows:
+            searchable = ' '.join((row['topic'], row['course_name'], row['course_code'], row['extracted_text'] or '')).casefold()
+            score = sum(searchable.count(term) for term in terms)
+            if score:
+                ranked.append((score + (100 if department_id and row['department_id'] == department_id else 0), row))
+        ranked.sort(key=lambda item: (-item[0], -item[1]['id']))
+        result, used = [], 0
+        for _, row in ranked[:max(1, min(int(limit or 5), 10))]:
+            text = (row['extracted_text'] or '').strip()
+            remaining = context_limit - used
+            if remaining <= 0: break
+            excerpt = text[:remaining]
+            result.append({'material_id': row['id'], 'course_name': row['course_name'], 'course_code': row['course_code'], 'topic': row['topic'], 'exam_type': row['exam_type'], 'text': excerpt})
+            used += len(excerpt)
+        return result
+    finally:
+        if own: conn.close()
+
+
+def get_material_text(material_id: int, conn: Optional[sqlite3.Connection] = None) -> Optional[str]:
+    # Returns stored extracted text ONLY for approved materials (safe for Q&A reuse).
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        row = conn.execute(
+            "SELECT extracted_text FROM study_materials WHERE id = ? AND status = 'approved'",
+            (material_id,),
+        ).fetchone()
+        return row["extracted_text"] if row else None
+    finally:
+        if own:
+            conn.close()
+
+# ---------------------------------------------------------------------------
+# Material Chunks Data Access Functions (Step 11 RAG)
+# ---------------------------------------------------------------------------
+
+def save_material_chunks(material_id: int, chunks: List[str],
+                         conn: Optional[sqlite3.Connection] = None) -> int:
+    # Replace all chunks for a material in one transaction (idempotent re-index).
+    clean_chunks = [c for c in (chunks or []) if isinstance(c, str) and c.strip()]
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM material_chunks WHERE material_id = ?", (material_id,))
+        for index, content in enumerate(clean_chunks):
+            cursor.execute(
+                "INSERT INTO material_chunks (material_id, chunk_index, content) VALUES (?, ?, ?)",
+                (material_id, index, content.strip()),
+            )
+        conn.commit()
+        return len(clean_chunks)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        if own:
+            conn.close()
+
+
+def delete_material_chunks(material_id: int, conn: Optional[sqlite3.Connection] = None) -> int:
+    # Remove all chunks for a material. Returns the number of rows deleted.
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM material_chunks WHERE material_id = ?", (material_id,))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        if own:
+            conn.close()
+
+
+def get_chunk_count(material_id: int, conn: Optional[sqlite3.Connection] = None) -> int:
+    # Count stored chunks for a material.
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM material_chunks WHERE material_id = ?", (material_id,)
+        ).fetchone()
+        return int(row["n"])
+    finally:
+        if own:
+            conn.close()
+
+
+def get_material_extracted_text(material_id: int, conn: Optional[sqlite3.Connection] = None) -> Optional[str]:
+    # Raw extracted text for indexing — independent of approval status.
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        row = conn.execute(
+            "SELECT extracted_text FROM study_materials WHERE id = ?", (material_id,)
+        ).fetchone()
+        return row["extracted_text"] if row else None
+    finally:
+        if own:
+            conn.close()
+
+# ---------------------------------------------------------------------------
+# AI Quiz Generator Data Access Functions (Step 12)
+# ---------------------------------------------------------------------------
+
+def create_generated_quiz(user_id: int, course_id: int, title: str, topic: str,
+                          exam_type: str, difficulty: str, questions: List[Dict[str, Any]],
+                          source_material_ids: Optional[List[int]] = None,
+                          conn: Optional[sqlite3.Connection] = None) -> int:
+    # Persist a generated quiz, its questions and its source traceability in one tx.
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO generated_quizzes (user_id, course_id, title, topic, exam_type, difficulty, question_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user_id, course_id, title, topic, exam_type, difficulty, len(questions)),
+        )
+        quiz_id = cursor.lastrowid
+        for order, question in enumerate(questions):
+            options = question["options"]
+            cursor.execute(
+                "INSERT INTO generated_quiz_questions "
+                "(quiz_id, question_text, option_a, option_b, option_c, option_d, correct_answer, explanation, question_order) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (quiz_id, question["question"], options[0], options[1], options[2], options[3],
+                 int(question["correct_answer"]), question["explanation"], order),
+            )
+        for material_id in (source_material_ids or []):
+            cursor.execute(
+                "INSERT OR IGNORE INTO quiz_sources (quiz_id, material_id) VALUES (?, ?)",
+                (quiz_id, material_id),
+            )
+        conn.commit()
+        return quiz_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        if own:
+            conn.close()
+
+
+def get_generated_quiz_for_user(quiz_id: int, user_id: int,
+                                conn: Optional[sqlite3.Connection] = None) -> Optional[sqlite3.Row]:
+    # Ownership-scoped fetch (prevents IDOR); joined with course/department labels.
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        return conn.execute(
+            "SELECT gq.*, c.course_name, c.course_code, d.code AS department_code "
+            "FROM generated_quizzes gq JOIN courses c ON gq.course_id = c.id "
+            "JOIN departments d ON c.department_id = d.id "
+            "WHERE gq.id = ? AND gq.user_id = ?",
+            (quiz_id, user_id),
+        ).fetchone()
+    finally:
+        if own:
+            conn.close()
+
+
+def get_generated_quiz_questions(quiz_id: int,
+                                 conn: Optional[sqlite3.Connection] = None) -> List[sqlite3.Row]:
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        return conn.execute(
+            "SELECT * FROM generated_quiz_questions WHERE quiz_id = ? ORDER BY question_order ASC",
+            (quiz_id,),
+        ).fetchall()
+    finally:
+        if own:
+            conn.close()
+
+
+def get_generated_quiz_sources(quiz_id: int,
+                               conn: Optional[sqlite3.Connection] = None) -> List[sqlite3.Row]:
+    # Safe source metadata only — never file paths or hidden columns.
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        return conn.execute(
+            "SELECT qs.material_id, sm.topic, c.course_name, c.course_code "
+            "FROM quiz_sources qs JOIN study_materials sm ON qs.material_id = sm.id "
+            "JOIN courses c ON sm.course_id = c.id WHERE qs.quiz_id = ?",
+            (quiz_id,),
+        ).fetchall()
+    finally:
+        if own:
+            conn.close()
+
+# ---------------------------------------------------------------------------
+# Quiz Attempt Data Access Functions (Step 13)
+# ---------------------------------------------------------------------------
+
+def get_quiz_questions_with_answers(quiz_id: int,
+                                    conn: Optional[sqlite3.Connection] = None) -> List[sqlite3.Row]:
+    # Server-side only: includes correct_answer. NEVER render this directly to the browser.
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        return conn.execute(
+            "SELECT id, quiz_id, question_text, option_a, option_b, option_c, option_d, "
+            "correct_answer, explanation, question_order "
+            "FROM generated_quiz_questions WHERE quiz_id = ? ORDER BY question_order ASC",
+            (quiz_id,),
+        ).fetchall()
+    finally:
+        if own:
+            conn.close()
+
+
+def get_active_attempt(quiz_id: int, user_id: int,
+                       conn: Optional[sqlite3.Connection] = None) -> Optional[sqlite3.Row]:
+    # The most recent UNSUBMITTED attempt for this user/quiz (to avoid new rows on refresh).
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        return conn.execute(
+            "SELECT * FROM generated_quiz_attempts "
+            "WHERE quiz_id = ? AND user_id = ? AND submitted_at IS NULL "
+            "ORDER BY id DESC LIMIT 1",
+            (quiz_id, user_id),
+        ).fetchone()
+    finally:
+        if own:
+            conn.close()
+
+
+def create_generated_quiz_attempt(quiz_id: int, user_id: int, total_questions: int,
+                                  conn: Optional[sqlite3.Connection] = None) -> int:
+    # Create an in-progress attempt (score/submitted_at stay NULL until submission).
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO generated_quiz_attempts (quiz_id, user_id, total_questions) VALUES (?, ?, ?)",
+            (quiz_id, user_id, total_questions),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        if own:
+            conn.close()
+
+
+def get_attempt_for_user(attempt_id: int, user_id: int,
+                         conn: Optional[sqlite3.Connection] = None) -> Optional[sqlite3.Row]:
+    # Ownership-scoped attempt fetch (prevents IDOR).
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        return conn.execute(
+            "SELECT a.*, gq.title, gq.topic, gq.difficulty, gq.exam_type, "
+            "c.course_name, c.course_code "
+            "FROM generated_quiz_attempts a "
+            "JOIN generated_quizzes gq ON a.quiz_id = gq.id "
+            "JOIN courses c ON gq.course_id = c.id "
+            "WHERE a.id = ? AND a.user_id = ?",
+            (attempt_id, user_id),
+        ).fetchone()
+    finally:
+        if own:
+            conn.close()
+
+
+def finalize_quiz_attempt(attempt_id: int, user_id: int, questions: List[sqlite3.Row],
+                          selected_answers: Dict[int, Optional[int]],
+                          conn: Optional[sqlite3.Connection] = None) -> Dict[str, Any]:
+    # Atomically score and finalize an attempt.
+    # - Rejects an already-submitted attempt (one-time submission).
+    # - Scores strictly using the database correct_answer (never client input).
+    # - Unanswered questions count as incorrect.
+    # - Writes attempt answers + finalized attempt in one transaction; rolls back on error.
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        cursor = conn.cursor()
+        # Lock/verify this attempt row is still unsubmitted and owned by the user.
+        row = cursor.execute(
+            "SELECT id, submitted_at FROM generated_quiz_attempts WHERE id = ? AND user_id = ?",
+            (attempt_id, user_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Attempt not found.")
+        if row["submitted_at"]:
+            raise ValueError("This attempt has already been submitted.")
+
+        correct = 0
+        answers_to_save = []
+        for question in questions:
+            qid = question["id"]
+            selected = selected_answers.get(qid)
+            is_correct = int(selected is not None and selected == question["correct_answer"])
+            if is_correct:
+                correct += 1
+            answers_to_save.append((attempt_id, qid, selected, is_correct))
+
+        total = len(questions)
+        wrong = total - correct
+        percentage = round((correct / total) * 100, 2) if total else 0.0
+        cursor.executemany(
+            "INSERT OR REPLACE INTO generated_quiz_attempt_answers "
+            "(attempt_id, question_id, selected_answer, is_correct) VALUES (?, ?, ?, ?)",
+            answers_to_save,
+        )
+        cursor.execute(
+            "UPDATE generated_quiz_attempts SET score = ?, correct_answers = ?, wrong_answers = ?, "
+            "percentage = ?, submitted_at = CURRENT_TIMESTAMP "
+            "WHERE id = ? AND user_id = ? AND submitted_at IS NULL",
+            (correct, correct, wrong, percentage, attempt_id, user_id),
+        )
+        if cursor.rowcount != 1:
+            # Lost a race: another request already finalized this attempt.
+            conn.rollback()
+            raise ValueError("This attempt has already been submitted.")
+        conn.commit()
+        return {
+            "attempt_id": attempt_id,
+            "score": correct,
+            "total_questions": total,
+            "correct_answers": correct,
+            "wrong_answers": wrong,
+            "percentage": percentage,
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        if own:
+            conn.close()
+
+
+def get_attempt_answers(attempt_id: int,
+                        conn: Optional[sqlite3.Connection] = None) -> List[sqlite3.Row]:
+    # Per-question review rows (joined with the stored questions for display).
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        return conn.execute(
+            "SELECT aa.question_id, aa.selected_answer, aa.is_correct, "
+            "qq.question_text, qq.option_a, qq.option_b, qq.option_c, qq.option_d, "
+            "qq.correct_answer, qq.explanation, qq.question_order "
+            "FROM generated_quiz_attempt_answers aa "
+            "JOIN generated_quiz_questions qq ON aa.question_id = qq.id "
+            "WHERE aa.attempt_id = ? ORDER BY qq.question_order ASC",
+            (attempt_id,),
+        ).fetchall()
+    finally:
+        if own:
+            conn.close()
+
+
+def get_user_quiz_attempts(user_id: int,
+                           conn: Optional[sqlite3.Connection] = None) -> List[sqlite3.Row]:
+    # Only finalized attempts, newest first, for the logged-in user.
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        return conn.execute(
+            "SELECT a.id, a.score, a.total_questions, a.correct_answers, a.wrong_answers, "
+            "a.percentage, a.submitted_at, gq.title, gq.topic, gq.difficulty, gq.exam_type, "
+            "c.course_name, c.course_code "
+            "FROM generated_quiz_attempts a "
+            "JOIN generated_quizzes gq ON a.quiz_id = gq.id "
+            "JOIN courses c ON gq.course_id = c.id "
+            "WHERE a.user_id = ? AND a.submitted_at IS NOT NULL "
+            "ORDER BY a.submitted_at DESC, a.id DESC",
+            (user_id,),
+        ).fetchall()
+    finally:
+        if own:
+            conn.close()
+
+# ---------------------------------------------------------------------------
+# Quiz Performance Analytics Data Access Functions (Step 14)
+# All queries are scoped to a single authenticated user_id (passed from the
+# session by the route) and only consider FINALIZED attempts. No client- supplied
+# user id is ever accepted. No answer keys are exposed here.
+# ---------------------------------------------------------------------------
+
+def get_performance_overview(user_id: int,
+                             conn: Optional[sqlite3.Connection] = None) -> Dict[str, Any]:
+    # Aggregate finalized attempts for one user. Zero-data safe (never divides by zero).
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS completed_quizzes, "
+            "COALESCE(SUM(total_questions), 0) AS total_questions, "
+            "COALESCE(SUM(correct_answers), 0) AS total_correct, "
+            "COALESCE(SUM(wrong_answers), 0) AS total_wrong, "
+            "COALESCE(AVG(percentage), 0) AS average_percentage "
+            "FROM generated_quiz_attempts "
+            "WHERE user_id = ? AND submitted_at IS NOT NULL",
+            (user_id,),
+        ).fetchone()
+        completed = int(row["completed_quizzes"] or 0)
+        total_questions = int(row["total_questions"] or 0)
+        total_correct = int(row["total_correct"] or 0)
+        total_wrong = int(row["total_wrong"] or 0)
+        accuracy = round((total_correct / total_questions) * 100, 2) if total_questions else 0.0
+        return {
+            "completed_quizzes": completed,
+            "total_questions": total_questions,
+            "total_correct": total_correct,
+            "total_wrong": total_wrong,
+            "overall_accuracy": accuracy,
+            "average_percentage": round(float(row["average_percentage"] or 0.0), 2),
+        }
+    finally:
+        if own:
+            conn.close()
+
+
+def get_performance_by_quiz(user_id: int,
+                            conn: Optional[sqlite3.Connection] = None) -> List[Dict[str, Any]]:
+    # Per-attempt performance for finalized attempts, newest first.
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        rows = conn.execute(
+            "SELECT a.id AS attempt_id, a.quiz_id, gq.title AS quiz_title, gq.topic, "
+            "a.score, a.total_questions, a.correct_answers, a.wrong_answers, "
+            "a.percentage, a.submitted_at, c.course_name, c.course_code "
+            "FROM generated_quiz_attempts a "
+            "JOIN generated_quizzes gq ON a.quiz_id = gq.id "
+            "LEFT JOIN courses c ON gq.course_id = c.id "
+            "WHERE a.user_id = ? AND a.submitted_at IS NOT NULL "
+            "ORDER BY a.submitted_at DESC, a.id DESC",
+            (user_id,),
+        ).fetchall()
+        return [
+            {
+                "attempt_id": r["attempt_id"],
+                "quiz_id": r["quiz_id"],
+                "quiz_title": r["quiz_title"],
+                "course_name": r["course_name"],
+                "course_code": r["course_code"],
+                "topic": r["topic"],
+                "score": r["score"],
+                "total_questions": r["total_questions"],
+                "correct_answers": r["correct_answers"],
+                "wrong_answers": r["wrong_answers"],
+                "percentage": round(float(r["percentage"] or 0.0), 2),
+                "submitted_at": r["submitted_at"],
+            }
+            for r in rows
+        ]
+    finally:
+        if own:
+            conn.close()
+
+
+def get_performance_by_course(user_id: int,
+                              conn: Optional[sqlite3.Connection] = None) -> List[Dict[str, Any]]:
+    # Aggregate finalized attempts by course (LEFT JOIN keeps orphans safe).
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        rows = conn.execute(
+            "SELECT c.id AS course_id, c.course_name, c.course_code, "
+            "COUNT(*) AS quiz_count, "
+            "COALESCE(SUM(a.total_questions), 0) AS total_questions, "
+            "COALESCE(SUM(a.correct_answers), 0) AS total_correct, "
+            "COALESCE(SUM(a.wrong_answers), 0) AS total_wrong, "
+            "COALESCE(AVG(a.percentage), 0) AS average_percentage "
+            "FROM generated_quiz_attempts a "
+            "JOIN generated_quizzes gq ON a.quiz_id = gq.id "
+            "LEFT JOIN courses c ON gq.course_id = c.id "
+            "WHERE a.user_id = ? AND a.submitted_at IS NOT NULL "
+            "GROUP BY c.id "
+            "ORDER BY average_percentage DESC",
+            (user_id,),
+        ).fetchall()
+        result = []
+        for r in rows:
+            total_questions = int(r["total_questions"] or 0)
+            total_correct = int(r["total_correct"] or 0)
+            result.append({
+                "course_id": r["course_id"],
+                "course_name": r["course_name"] or "Unknown course",
+                "course_code": r["course_code"] or "N/A",
+                "quiz_count": int(r["quiz_count"] or 0),
+                "total_questions": total_questions,
+                "total_correct": total_correct,
+                "total_wrong": int(r["total_wrong"] or 0),
+                "accuracy": round((total_correct / total_questions) * 100, 2) if total_questions else 0.0,
+                "average_percentage": round(float(r["average_percentage"] or 0.0), 2),
+            })
+        return result
+    finally:
+        if own:
+            conn.close()
+
+
+def get_performance_by_topic(user_id: int,
+                             conn: Optional[sqlite3.Connection] = None) -> List[Dict[str, Any]]:
+    # Aggregate finalized attempts by quiz topic (raw performance only; no weak/strong labels).
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        rows = conn.execute(
+            "SELECT gq.topic, COUNT(*) AS quiz_count, "
+            "COALESCE(SUM(a.total_questions), 0) AS total_questions, "
+            "COALESCE(SUM(a.correct_answers), 0) AS total_correct, "
+            "COALESCE(SUM(a.wrong_answers), 0) AS total_wrong, "
+            "COALESCE(AVG(a.percentage), 0) AS average_percentage "
+            "FROM generated_quiz_attempts a "
+            "JOIN generated_quizzes gq ON a.quiz_id = gq.id "
+            "WHERE a.user_id = ? AND a.submitted_at IS NOT NULL "
+            "GROUP BY gq.topic "
+            "ORDER BY average_percentage DESC",
+            (user_id,),
+        ).fetchall()
+        result = []
+        for r in rows:
+            total_questions = int(r["total_questions"] or 0)
+            total_correct = int(r["total_correct"] or 0)
+            result.append({
+                "topic": r["topic"] or "General",
+                "quiz_count": int(r["quiz_count"] or 0),
+                "total_questions": total_questions,
+                "total_correct": total_correct,
+                "total_wrong": int(r["total_wrong"] or 0),
+                "accuracy": round((total_correct / total_questions) * 100, 2) if total_questions else 0.0,
+                "average_percentage": round(float(r["average_percentage"] or 0.0), 2),
+            })
+        return result
+    finally:
+        if own:
+            conn.close()
+
+
+def get_recent_performance(user_id: int, limit: int = 10,
+                           conn: Optional[sqlite3.Connection] = None) -> List[Dict[str, Any]]:
+    # Latest finalized attempts, newest first (bounded).
+    limit = max(1, min(int(limit or 10), 50))
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        rows = conn.execute(
+            "SELECT a.id AS attempt_id, gq.title AS quiz_title, gq.topic, "
+            "a.percentage, a.submitted_at, c.course_name, c.course_code "
+            "FROM generated_quiz_attempts a "
+            "JOIN generated_quizzes gq ON a.quiz_id = gq.id "
+            "LEFT JOIN courses c ON gq.course_id = c.id "
+            "WHERE a.user_id = ? AND a.submitted_at IS NOT NULL "
+            "ORDER BY a.submitted_at DESC, a.id DESC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()
+        return [
+            {
+                "attempt_id": r["attempt_id"],
+                "quiz_title": r["quiz_title"],
+                "topic": r["topic"],
+                "course_name": r["course_name"] or "Unknown course",
+                "course_code": r["course_code"] or "N/A",
+                "percentage": round(float(r["percentage"] or 0.0), 2),
+                "submitted_at": r["submitted_at"],
+            }
+            for r in rows
+        ]
+    finally:
+        if own:
+            conn.close()
 
 # ---------------------------------------------------------------------------
 # Admin Approval Workflow Data Access Functions (Step 8)
@@ -1213,7 +1812,7 @@ def create_notification(user_id: int, notification_type: str, title: str, messag
         clean_title = str(title).strip()
         clean_message = str(message).strip()
         existing = conn.execute(
-            "SELECT id FROM notifications WHERE user_id = :user_id AND type = :type AND title = :title AND message = :message AND link IS ? LIMIT 1",
+            "SELECT id FROM notifications WHERE user_id = :user_id AND type = :type AND title = :title AND message = :message AND link IS :link LIMIT 1",
             {"user_id": user_id, "type": notification_type, "title": clean_title, "message": clean_message, "link": link},
         ).fetchone()
         if existing:

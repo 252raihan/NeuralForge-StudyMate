@@ -8,7 +8,7 @@
     <p class="text-sm text-slate-400 mt-2">{{ quiz.question_count }} questions · {{ quiz.difficulty|capitalize }}
       difficulty</p>
   </div>
-  <form method="POST" action="{{ url_for('quiz_submit', quiz_id=quiz.id) }}" class="space-y-5">
+  <form method="POST" action="{{ url_for('quiz_submit', quiz_id=quiz.id) }}" class="space-y-5"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     {% for question in questions %}<article class="rounded-2xl border border-white/10 bg-slate-900/80 p-5">
       <div class="flex justify-between gap-3">
         <h2 class="font-bold text-white">{{ loop.index }}. {{ question.question_text }}</h2><span

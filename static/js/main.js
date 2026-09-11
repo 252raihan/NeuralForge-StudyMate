@@ -291,6 +291,8 @@ function initPdfUpload() {
     formData.append('course_code', courseCode);
     formData.append('topic', topic);
     formData.append('file', currentSelectedFile, currentSelectedFile.name);
+    const csrfInput = uploadForm.querySelector('input[name="csrf_token"]');
+    if (csrfInput) formData.append('csrf_token', csrfInput.value);
 
     try {
       const response = await fetch('/upload', {

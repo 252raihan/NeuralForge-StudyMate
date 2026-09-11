@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Ask StudyMate | NeuralForge StudyMate{% endblock %}
+{% block content %}
+<section class="min-h-[calc(100vh-140px)] py-16 px-4 sm:px-6 lg:px-8">
+  <div class="max-w-5xl mx-auto">
+    <div class="mb-8"><span class="text-brand-300 text-xs font-bold">🧠 APPROVED MATERIALS ONLY</span>
+      <h1 class="mt-2 text-3xl sm:text-4xl font-extrabold text-white">Ask StudyMate</h1>
+      <p class="mt-2 text-slate-400">Ask an academic question and get a clear answer grounded in administrator-approved
+        study materials.</p>
+    </div>
+    <div class="rounded-2xl border-white/10 bg-slate-900/80 p-5 sm:p-7"><label for="question"
+        class="block text-sm font-semibold text-white">Your question</label><textarea id="question" maxlength="2000"
+        rows="5" class="form-input mt-2 w-full" placeholder="What is normalization?"></textarea>
+      <div class="mt-4 flex items-center gap-3"><button id="ask-button"
+          class="px-5 py-2.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-sm font-bold">Ask
+          StudyMate</button><span id="loading" class="hidden text-sm text-brand-300">Thinking…</span></div>
+      <p id="error" class="hidden mt-4 rounded-lg bg-rose-500/10 p-3 text-sm text-rose-300"></p>
+    </div>
+    <div id="empty" class="mt-6 rounded-2xl border-white/10 bg-slate-900/40 p-10 text-center text-slate-400">Your
+      grounded answer and source materials will appear here.</div>
+    <div id="result" class="hidden mt-6 space-y-5">
+      <article class="rounded-2xl border-white/10 bg-slate-900/80 p-5">
+        <h2 class="text-lg font-bold text-white">Answer</h2>
+        <div id="answer" class="mt-3 whitespace-pre-wrap text-slate-200 leading-7"></div>
+      </article>
+      <section>
+        <h2 class="text-lg font-bold text-white">Source materials</h2>
+        <div id="sources" class="mt-3 grid gap-3 sm:grid-cols-2"></div>
+      </section><button id="another" class="text-sm font-semibold text-brand-300 hover:text-white">Ask Another
+        Question</button>
+    </div>
+  </div>
+</section>
+<script>
+  const q = document.getElementById('question'), ask = document.getElementById('ask-button'), loading = document.getElementById('loading'), error = document.getElementById('error'), empty = document.getElementById('empty'), result = document.getElementById('result');
+  function text(parent, tag, value, cls) { const el = document.createElement(tag); el.textContent = value; if (cls) el.className = cls; parent.appendChild(el); return el; }
+  ask.addEventListener('click', async () => { error.classList.add('hidden'); const question = q.value.trim(); if (!question) { error.textContent = 'Please enter a question.'; error.classList.remove('hidden'); return; } ask.disabled = true; loading.classList.remove('hidden'); try { const r = await fetch('{{ url_for("ask_studymate_api") }}', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': '{{ csrf_token }}' }, body: JSON.stringify({ question }) }); const data = await r.json(); if (!r.ok || !data.success) throw new Error(data.error || 'StudyMate could not answer right now.'); document.getElementById('answer').textContent = data.answer; const box = document.getElementById('sources'); box.replaceChildren(); data.sources.forEach(s => { const card = document.createElement('article'); card.className = 'rounded-xl border-white/10 bg-slate-950/50 p-4'; text(card, 'h3', s.course_name, 'font-semibold text-white'); text(card, 'p', s.course_code + ' · ' + s.topic, 'mt-1 text-sm text-slate-300'); text(card, 'p', 'Exam: ' + s.exam_type + ' · Material #' + s.material_id, 'mt-2 text-xs text-slate-400'); const link = document.createElement('a'); link.href = s.library_url; link.textContent = 'View in Study Library'; link.className = 'mt-3 inline-block text-xs text-brand-300'; link.target = '_blank'; card.appendChild(link); box.appendChild(card); }); empty.classList.add('hidden'); result.classList.remove('hidden'); } catch (e) { error.textContent = e.message; error.classList.remove('hidden'); } finally { ask.disabled = false; loading.classList.add('hidden'); } }); document.getElementById('another').addEventListener('click', () => { q.value = ''; result.classList.add('hidden'); empty.classList.remove('hidden'); q.focus(); });
+</script>
+{% endblock %}

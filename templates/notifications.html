@@ -10,7 +10,7 @@
         <p class="text-sm font-semibold text-brand-300">🔔 Activity Alerts</p>
         <h1 class="mt-1 text-3xl font-extrabold text-white">Notifications</h1>
         <p class="mt-2 text-sm text-slate-400">Updates about your materials and quiz activity.</p>
-      </div>{% if unread_notification_count %}<form method="POST" action="{{ url_for('notifications_read_all') }}">
+      </div>{% if unread_notification_count %}<form method="POST" action="{{ url_for('notifications_read_all') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="rounded-lg bg-brand-600 px-4 py-2 text-xs font-bold text-white hover:bg-brand-500">Mark all as
           read</button></form>{% endif %}
     </div>
@@ -36,8 +36,7 @@
             <p class="mt-2 text-sm text-slate-300">{{ item.message }}</p>
             <p class="mt-2 text-xs capitalize text-slate-500">{{ item.type|replace('_', ' ') }} · {{ item.created_at }}
             </p>
-          </div>{% if item.link %}<form method="POST"
-            action="{{ url_for('notification_read', notification_id=item.id) }}"><button
+          </div>{% if item.link %}<form method="POST" action="{{ url_for('notification_read', notification_id=item.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button
               class="whitespace-nowrap text-xs font-semibold text-brand-300">Open</button></form>{% endif %}
         </div>
       </article>{% endfor %}</div>{% else %}<div class="rounded-2xl border-white/10 bg-slate-900/50 p-12 text-center">

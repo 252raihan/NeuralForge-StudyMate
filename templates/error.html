@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ status_code }} | NeuralForge StudyMate{% endblock %}
+{% block content %}<section class="mx-auto max-w-xl px-4 py-24 text-center">
+    <div class="rounded-2xl border-white/10 bg-slate-900/80 p-10">
+        <p class="text-5xl font-extrabold text-brand-300">{{ status_code }}</p>
+        <h1 class="mt-4 text-xl font-bold text-white">{{ message }}</h1><a href="{{ url_for('home') }}"
+            class="mt-6 inline-block rounded-lg bg-brand-600 px-4 py-2 text-sm font-bold text-white">Return home</a>
+    </div>
+</section>{% endblock %}

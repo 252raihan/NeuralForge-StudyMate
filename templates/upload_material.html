@@ -62,7 +62,7 @@
       {% endwith %}
 
       <form id="study-material-form" method="POST" action="{{ url_for('upload_study_material') }}"
-        enctype="multipart/form-data" class="space-y-6">
+        enctype="multipart/form-data" class="space-y-6"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
         <!-- Department Info Badge -->
         <div

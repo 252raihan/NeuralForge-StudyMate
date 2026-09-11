@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}My Performance | NeuralForge StudyMate{% endblock %}
+{% block content %}
+<section class="min-h-[calc(100vh-140px)] py-16 px-4 sm:px-6 lg:px-8">
+  <div class="max-w-6xl mx-auto">
+    <div class="mb-8">
+      <span class="text-brand-300 text-xs font-bold">📈 PERFORMANCE ANALYSIS</span>
+      <h1 class="mt-2 text-3xl sm:text-4xl font-extrabold text-white">My Performance</h1>
+      <p class="mt-2 text-slate-400">Insights from your completed quizzes ({{ overview.completed_quizzes }} completed).
+      </p>
+    </div>
+
+    {% if overview.completed_quizzes == 0 %}
+    <div class="rounded-2xl border-white/10 bg-slate-900/40 p-12 text-center">
+      <div class="text-4xl mb-3">📈</div>
+      <h2 class="text-lg font-bold text-white">No performance data yet.</h2>
+      <p class="mt-2 text-sm text-slate-400">Complete a quiz to see your accuracy, course and topic performance here.
+      </p>
+      <a href="{{ url_for('quiz_create_page') }}"
+        class="mt-5 inline-block px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-sm font-bold">Generate
+        a Quiz</a>
+    </div>
+    {% else %}
+
+    <!-- Overview metric cards -->
+    <div class="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-10">
+      <div class="rounded-2xl border-white/10 bg-slate-900/80 p-5">
+        <p class="text-3xl font-extrabold text-white">{{ overview.completed_quizzes }}</p>
+        <p class="text-xs text-slate-400 mt-1">Quizzes Completed</p>
+      </div>
+      <div class="rounded-2xl border-white/10 bg-slate-900/80 p-5">
+        <p class="text-3xl font-extrabold text-white">{{ overview.total_questions }}</p>
+        <p class="text-xs text-slate-400 mt-1">Questions Attempted</p>
+      </div>
+      <div class="rounded-2xl border-white/10 bg-slate-900/80 p-5">
+        <p class="text-3xl font-extrabold text-emerald-400">{{ overview.total_correct }}</p>
+        <p class="text-xs text-slate-400 mt-1">Correct Answers</p>
+      </div>
+      <div class="rounded-2xl border-white/10 bg-slate-900/80 p-5">
+        <p class="text-3xl font-extrabold text-rose-400">{{ overview.total_wrong }}</p>
+        <p class="text-xs text-slate-400 mt-1">Wrong Answers</p>
+      </div>
+      <div class="rounded-2xl border-white/10 bg-slate-900/80 p-5">
+        <p class="text-3xl font-extrabold text-brand-300">{{ overview.overall_accuracy }}%</p>
+        <p class="text-xs text-slate-400 mt-1">Overall Accuracy</p>
+      </div>
+      <div class="rounded-2xl border-white/10 bg-slate-900/80 p-5">
+        <p class="text-3xl font-extrabold text-purple-300">{{ overview.average_percentage }}%</p>
+        <p class="text-xs text-slate-400 mt-1">Average Percentage</p>
+      </div>
+    </div>
+
+    <!-- Quiz performance -->
+    <h2 class="text-lg font-bold text-white mb-3">Quiz Performance</h2>
+    <div class="space-y-3 mb-10">
+      {% for item in quiz_performance %}
+      <article class="rounded-2xl border-white/10 bg-slate-900/80 p-4 flex-wrap items-center justify-between gap-3">
+        <div>
+          <p class="font-semibold text-white">{{ item.quiz_title }}</p>
+          <div class="mt-1 flex-wrap gap-2 text-xs text-slate-400">
+            {% if item.course_code %}<span class="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono">{{
+              item.course_code }}</span>{% endif %}
+            <span>Topic: {{ item.topic }}</span><span>· {{ item.submitted_at }}</span>
+          </div>
+        </div>
+        <div class="flex items-center gap-4">
+          <div class="w-28">
+            <div class="h-2 rounded-full bg-slate-800">
+              <div class="h-2 rounded-full bg-brand-500" style="width: {{ item.percentage }}%"></div>
+            </div>
+          </div>
+          <div class="text-right">
+            <p class="font-bold text-white">{{ item.percentage }}%</p>
+            <p class="text-xs text-slate-400">{{ item.correct_answers }}/{{ item.total_questions }}</p>
+          </div>
+          <a href="{{ url_for('quiz_attempt_result', attempt_id=item.attempt_id) }}"
+            class="px-3 py-1.5 rounded-lg border-white/10 hover:bg-white/5 text-slate-200 text-xs font-semibold">View</a>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+
+    <!-- Course performance -->
+    <h2 class="text-lg font-bold text-white mb-3">Course Performance</h2>
+    <div class="overflow-x-auto mb-10">
+      <table class="w-full text-sm text-left">
+        <thead class="text-xs text-slate-400 uppercase border-b border-white/10">
+          <tr>
+            <th class="py-2 pr-3">Course</th>
+            <th class="py-2 pr-3">Quizzes</th>
+            <th class="py-2 pr-3">Questions</th>
+            <th class="py-2 pr-3">Correct</th>
+            <th class="py-2 pr-3">Wrong</th>
+            <th class="py-2 pr-3">Accuracy</th>
+            <th class="py-2 pr-3">Avg %</th>
+          </tr>
+        </thead>
+        <tbody class="text-slate-200">
+          {% for row in course_performance %}
+          <tr class="border-b border-white/5">
+            <td class="py-2.5 pr-3"><span class="font-mono text-purple-300">{{ row.course_code }}</span> {{
+              row.course_name }}</td>
+            <td class="py-2.5 pr-3">{{ row.quiz_count }}</td>
+            <td class="py-2.5 pr-3">{{ row.total_questions }}</td>
+            <td class="py-2.5 pr-3 text-emerald-400">{{ row.total_correct }}</td>
+            <td class="py-2.5 pr-3 text-rose-400">{{ row.total_wrong }}</td>
+            <td class="py-2.5 pr-3">{{ row.accuracy }}%</td>
+            <td class="py-2.5 pr-3">{{ row.average_percentage }}%</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Topic performance -->
+    <h2 class="text-lg font-bold text-white mb-3">Topic Performance</h2>
+    <div class="overflow-x-auto mb-10">
+      <table class="w-full text-sm text-left">
+        <thead class="text-xs text-slate-400 uppercase border-b border-white/10">
+          <tr>
+            <th class="py-2 pr-3">Topic</th>
+            <th class="py-2 pr-3">Quizzes</th>
+            <th class="py-2 pr-3">Questions</th>
+            <th class="py-2 pr-3">Correct</th>
+            <th class="py-2 pr-3">Wrong</th>
+            <th class="py-2 pr-3">Accuracy</th>
+            <th class="py-2 pr-3">Avg %</th>
+          </tr>
+        </thead>
+        <tbody class="text-slate-200">
+          {% for row in topic_performance %}
+          <tr class="border-b border-white/5">
+            <td class="py-2.5 pr-3">{{ row.topic }}</td>
+            <td class="py-2.5 pr-3">{{ row.quiz_count }}</td>
+            <td class="py-2.5 pr-3">{{ row.total_questions }}</td>
+            <td class="py-2.5 pr-3 text-emerald-400">{{ row.total_correct }}</td>
+            <td class="py-2.5 pr-3 text-rose-400">{{ row.total_wrong }}</td>
+            <td class="py-2.5 pr-3">{{ row.accuracy }}%</td>
+            <td class="py-2.5 pr-3">{{ row.average_percentage }}%</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Recent performance -->
+    <h2 class="text-lg font-bold text-white mb-3">Recent Performance</h2>
+    <div class="space-y-2">
+      {% for item in recent_performance %}
+      <div class="rounded-xl border-white/10 bg-slate-900/60 p-3 flex-wrap items-center justify-between gap-2 text-sm">
+        <span class="text-slate-200">{{ item.quiz_title }} <span class="text-slate-500">· {{ item.topic }}</span></span>
+        <span class="text-slate-400 text-xs">{{ item.submitted_at }}</span>
+        <span class="font-bold {% if item.percentage >= 50 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{
+          item.percentage }}%</span>
+      </div>
+      {% endfor %}
+    </div>
+
+    {% endif %}
+  </div>
+</section>
+{% endblock %}
