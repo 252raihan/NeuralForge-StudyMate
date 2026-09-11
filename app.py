@@ -7,7 +7,7 @@ import os
 import datetime
 from pathlib import Path
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request, redirect, url_for, flash, session, abort
+from flask import Flask, jsonify, render_template, request, redirect, url_for, flash, session, abort, send_file
 from werkzeug.utils import secure_filename
 
 # Load environment variables from .env file
@@ -33,6 +33,10 @@ from database.db import (
     get_user_by_id,
     create_study_material,
     get_study_materials_by_user,
+    get_pending_study_materials,
+    get_study_material_details,
+    get_study_materials_by_status,
+    update_study_material_status,
 )
 from services.auth_service import (
     register_student,
@@ -487,6 +491,136 @@ def my_study_materials():
     user_id = session["user_id"]
     materials = get_study_materials_by_user(user_id)
     return render_template("my_materials.html", materials=materials)
+
+
+# ===========================================================================
+# Step 8: Admin Dashboard & Approval Workflow Routes
+# ===========================================================================
+
+def _admin_wants_json() -> bool:
+    """True when the request expects a JSON response (API / automated tests)."""
+    return request.headers.get("Accept") == "application/json" or request.is_json
+
+
+@app.route("/admin/dashboard", methods=["GET"])
+@login_required
+@admin_required
+def admin_dashboard():
+    """
+    Step 8: Admin-only dashboard listing pending study materials for review.
+    Students and unauthenticated users are blocked server-side by the decorators.
+    """
+    pending_materials = get_pending_study_materials()
+    return render_template(
+        "admin/dashboard.html",
+        materials=pending_materials,
+        pending_count=len(pending_materials)
+    )
+
+
+@app.route("/admin/material/<int:material_id>", methods=["GET"])
+@login_required
+@admin_required
+def admin_material_detail(material_id: int):
+    """
+    Step 8: Admin-only material review page. Shows full academic metadata
+    and provides a controlled, in-browser PDF preview. The server filesystem
+    path is never exposed — the PDF is served via /admin/material/<id>/pdf.
+    """
+    material = get_study_material_details(material_id)
+    if not material:
+        flash("Study material not found.", "error")
+        return redirect(url_for("admin_dashboard"))
+    return render_template("admin/material_detail.html", material=material)
+
+
+@app.route("/admin/material/<int:material_id>/pdf", methods=["GET"])
+@login_required
+@admin_required
+def admin_material_pdf(material_id: int):
+    """
+    Step 8: Controlled PDF access for admins only. Serves the stored file
+    inline (browser preview) without exposing the server filesystem path.
+    Path traversal is impossible because the stored filename is resolved
+    strictly inside the uploads/ directory.
+    """
+    material = get_study_material_details(material_id)
+    if not material:
+        flash("Study material not found.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    stored_name = Path(material["file_path"]).name  # strip any prefix
+    file_location = UPLOAD_FOLDER / stored_name
+    if not file_location.is_file():
+        flash("The uploaded PDF file could not be found on the server.", "error")
+        return redirect(url_for("admin_material_detail", material_id=material_id))
+
+    return send_file(
+        str(file_location),
+        mimetype="application/pdf",
+        as_attachment=False,
+        download_name=stored_name,
+    )
+
+
+@app.route("/admin/material/<int:material_id>/approve", methods=["POST"])
+@login_required
+@admin_required
+def admin_approve_material(material_id: int):
+    """
+    Step 8: Admin-only approval action. pending -> approved.
+    Uses POST (never GET) so status changes cannot happen via URL navigation.
+    The target status is decided server-side; no status field is read from
+    the request body, so request manipulation cannot alter the outcome.
+    """
+    material = get_study_material_details(material_id)
+    if not material:
+        if _admin_wants_json():
+            return jsonify({"success": False, "error": "Study material not found."}), 404
+        flash("Study material not found.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    update_study_material_status(material_id, "approved")
+
+    if _admin_wants_json():
+        return jsonify({
+            "success": True,
+            "message": "Study material approved successfully.",
+            "material_id": material_id,
+            "status": "approved"
+        }), 200
+
+    flash(f"'{material['topic']}' approved successfully.", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/material/<int:material_id>/reject", methods=["POST"])
+@login_required
+@admin_required
+def admin_reject_material(material_id: int):
+    """
+    Step 8: Admin-only rejection action. pending -> rejected.
+    POST-only, status decided server-side, no frontend-controlled values.
+    """
+    material = get_study_material_details(material_id)
+    if not material:
+        if _admin_wants_json():
+            return jsonify({"success": False, "error": "Study material not found."}), 404
+        flash("Study material not found.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    update_study_material_status(material_id, "rejected")
+
+    if _admin_wants_json():
+        return jsonify({
+            "success": True,
+            "message": "Study material rejected successfully.",
+            "material_id": material_id,
+            "status": "rejected"
+        }), 200
+
+    flash(f"'{material['topic']}' rejected successfully.", "info")
+    return redirect(url_for("admin_dashboard"))
 
 
 @app.route("/logout", methods=["GET"])

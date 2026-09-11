@@ -424,3 +424,147 @@ def get_study_materials_by_user(
     finally:
         if close_on_exit:
             conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Admin Approval Workflow Data Access Functions (Step 8)
+# ---------------------------------------------------------------------------
+
+def get_study_materials_by_status(
+    status: str,
+    conn: Optional[sqlite3.Connection] = None
+) -> List[sqlite3.Row]:
+    """
+    Retrieves all study materials with the given status ('pending', 'approved',
+    'rejected'), joined with course, department and uploader details.
+    Ordered by creation date ascending (oldest first, for fair admin review).
+    """
+    if status not in ("pending", "approved", "rejected"):
+        raise ValueError(f"Invalid status filter: '{status}'.")
+
+    close_on_exit = False
+    if conn is None:
+        conn = get_db_connection()
+        close_on_exit = True
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT
+                sm.id,
+                sm.course_id,
+                sm.topic,
+                sm.exam_type,
+                sm.file_path,
+                sm.uploaded_by,
+                sm.status,
+                sm.created_at,
+                c.course_name,
+                c.course_code,
+                d.name AS department_name,
+                d.code AS department_code,
+                u.name AS uploader_name,
+                u.email AS uploader_email
+            FROM study_materials sm
+            JOIN courses c ON sm.course_id = c.id
+            JOIN departments d ON c.department_id = d.id
+            JOIN users u ON sm.uploaded_by = u.id
+            WHERE sm.status = ?
+            ORDER BY sm.created_at ASC, sm.id ASC
+            """,
+            (status,)
+        )
+        return cursor.fetchall()
+    finally:
+        if close_on_exit:
+            conn.close()
+
+
+def get_pending_study_materials(conn: Optional[sqlite3.Connection] = None) -> List[sqlite3.Row]:
+    """Convenience wrapper: retrieves all materials with status = 'pending'."""
+    return get_study_materials_by_status("pending", conn=conn)
+
+
+def get_study_material_details(
+    material_id: int,
+    conn: Optional[sqlite3.Connection] = None
+) -> Optional[sqlite3.Row]:
+    """
+    Retrieves a single study material with full joined details
+    (course, department, uploader) for the admin review page.
+    """
+    close_on_exit = False
+    if conn is None:
+        conn = get_db_connection()
+        close_on_exit = True
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT
+                sm.id,
+                sm.course_id,
+                sm.topic,
+                sm.exam_type,
+                sm.file_path,
+                sm.uploaded_by,
+                sm.status,
+                sm.created_at,
+                c.course_name,
+                c.course_code,
+                d.name AS department_name,
+                d.code AS department_code,
+                u.name AS uploader_name,
+                u.email AS uploader_email
+            FROM study_materials sm
+            JOIN courses c ON sm.course_id = c.id
+            JOIN departments d ON c.department_id = d.id
+            JOIN users u ON sm.uploaded_by = u.id
+            WHERE sm.id = ?
+            """,
+            (material_id,)
+        )
+        return cursor.fetchone()
+    finally:
+        if close_on_exit:
+            conn.close()
+
+
+def update_study_material_status(
+    material_id: int,
+    new_status: str,
+    conn: Optional[sqlite3.Connection] = None
+) -> bool:
+    """
+    Updates a study material's approval status (admin approval workflow).
+    Allowed transitions (from any current status):
+        pending -> approved | rejected
+        approved -> rejected   (admin may change their mind)
+        rejected -> approved   (admin may change their mind)
+    Transitions to 'pending' are NOT allowed — a material can never go back
+    into the pending queue via status update.
+    Returns True if a row was updated, False if the material does not exist.
+    Raises ValueError for invalid target status.
+    """
+    new_status = (new_status or "").lower().strip()
+    if new_status not in ("approved", "rejected"):
+        raise ValueError(f"Invalid status: '{new_status}'. Must be 'approved' or 'rejected'.")
+
+    close_on_exit = False
+    if conn is None:
+        conn = get_db_connection()
+        close_on_exit = True
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE study_materials SET status = ? WHERE id = ?",
+            (new_status, material_id)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        if close_on_exit:
+            conn.close()
