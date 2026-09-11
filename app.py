@@ -5,7 +5,9 @@ Step 4: PDF upload, text extraction, and AI summarization.
 
 import os
 import datetime
+import json
 from pathlib import Path
+from werkzeug.exceptions import HTTPException
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, redirect, url_for, flash, session, abort, send_file
 from werkzeug.utils import secure_filename
@@ -15,10 +17,10 @@ load_dotenv()
 
 try:
     from services.pdf_processor import extract_text_from_pdf
-    from services.ai_service import generate_pdf_summary
+    from services.ai_service import generate_pdf_summary, generate_quiz_questions
 except ImportError:
     from pdf_processor import extract_text_from_pdf
-    from services.ai_service import generate_pdf_summary
+    from services.ai_service import generate_pdf_summary, generate_quiz_questions
 
 from database.db import (
     init_db,
@@ -39,6 +41,35 @@ from database.db import (
     update_study_material_status,
     get_approved_study_materials,
     count_approved_study_materials,
+    search_approved_study_materials,
+    count_search_approved_study_materials,
+    add_bookmark,
+    remove_bookmark,
+    get_bookmarked_material_ids,
+    get_user_bookmarks,
+    count_user_bookmarks,
+    get_student_dashboard_stats,
+    get_student_course_progress,
+    get_recent_student_materials,
+    get_recent_student_bookmarks,
+    get_recent_student_quizzes,
+    create_quiz,
+    get_quiz_for_user,
+    get_quiz_questions,
+    create_quiz_attempt,
+    get_quiz_attempt_for_user,
+    get_attempt_review,
+    get_user_notifications,
+    count_user_notifications,
+    count_unread_notifications,
+    mark_notification_as_read,
+    mark_all_notifications_as_read,
+    get_notification_for_user,
+)
+from services.notification_service import (
+    notify_material_approved,
+    notify_material_rejected,
+    notify_quiz_completed,
 )
 from services.auth_service import (
     register_student,
@@ -97,6 +128,11 @@ with app.app_context():
 # 16 MB max upload size
 app.config["UPLOAD_FOLDER"] = str(UPLOAD_FOLDER)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
+@app.context_processor
+def notification_context():
+    # Expose only the current user's unread notification count to templates."
+    user_id = session.get("user_id")
+    return {"unread_notification_count": count_unread_notifications(user_id) if user_id else 0}
 
 ALLOWED_EXTENSIONS = {"pdf"}
 
@@ -496,76 +532,166 @@ def my_study_materials():
 
 
 # ===========================================================================
+# Step 10: AI-Powered Question & Quiz Generator
+# ===========================================================================
+
+QUIZ_TYPES = {"mcq", "short", "mixed"}
+QUIZ_DIFFICULTIES = {"easy", "medium", "hard", "mixed"}
+
+
+def _quiz_error(message, status=400):
+    if request.is_json or request.headers.get("Accept") == "application/json":
+        return jsonify({"success": False, "error": message}), status
+    flash(message, "error")
+    return redirect(request.referrer or url_for("study_library"))
+
+
+def _approved_material_content(material):
+    if not material or material["status"] != "approved":
+        return None
+    stored_name = Path(material["file_path"]).name
+    file_location = UPLOAD_FOLDER / stored_name
+    if file_location.suffix.lower() != ".pdf" or not file_location.is_file():
+        return None
+    try:
+        content = extract_text_from_pdf(file_location).get("text", "").strip()
+    except Exception:
+        return None
+    return content or None
+@app.route("/quiz/create/<int:material_id>", methods=["GET"])
+@login_required
+def quiz_create(material_id):
+    material = get_study_material_details(material_id)
+    if not material or material["status"] != "approved" or not _approved_material_content(material):
+        return _quiz_error("This approved study material is unavailable for quiz generation.", 404)
+    return render_template("quiz_create.html", material=material, quiz_types=sorted(QUIZ_TYPES), difficulties=sorted(QUIZ_DIFFICULTIES))
+
+@app.route("/quiz/generate/<int:material_id>", methods=["POST"])
+@login_required
+def quiz_generate(material_id):
+    material = get_study_material_details(material_id)
+    content = _approved_material_content(material)
+    if not material or material["status"] != "approved" or not content:
+        return _quiz_error("Only approved materials with usable content can generate quizzes.", 404)
+    question_type = (request.form.get("question_type") or "").strip().lower()
+    difficulty = (request.form.get("difficulty") or "").strip().lower()
+    raw_count = (request.form.get("question_count") or "").strip()
+    if question_type not in QUIZ_TYPES or difficulty not in QUIZ_DIFFICULTIES:
+        return _quiz_error("Invalid quiz type or difficulty.")
+    try:
+        count = int(raw_count)
+    except (TypeError, ValueError):
+        return _quiz_error("Question count must be a whole number between 1 and 20.")
+    if not 1 <= count <= 20:
+        return _quiz_error("Question count must be between 1 and 20.")
+    try:
+        questions = generate_quiz_questions(content, question_type, difficulty, count)
+        quiz_id = create_quiz(material_id, session["user_id"], f"{material['topic']} Quiz", question_type, difficulty, count, questions)
+    except ValueError as exc:
+        return _quiz_error(str(exc))
+    except Exception:
+        return _quiz_error("Quiz generation failed. Please try again later.", 503)
+    return redirect(url_for("quiz_take", quiz_id=quiz_id))
+
+@app.route("/quiz/<int:quiz_id>", methods=["GET"])
+@login_required
+def quiz_take(quiz_id):
+    quiz = get_quiz_for_user(quiz_id, session["user_id"])
+    if not quiz:
+        abort(404)
+    questions = get_quiz_questions(quiz_id)
+    safe_questions = []
+    for question in questions:
+        item = dict(question)
+        item["options"] = json.loads(item["options_json"]) if item.get("options_json") else []
+        item.pop("correct_answer", None)
+        item.pop("expected_answer", None)
+        item.pop("options_json", None)
+        safe_questions.append(item)
+    return render_template("quiz.html", quiz=quiz, questions=safe_questions)
+
+
+def _normalize_answer(value):
+    return " ".join(str(value or "").casefold().split())
+
+@app.route("/quiz/<int:quiz_id>/submit", methods=["POST"])
+@login_required
+def quiz_submit(quiz_id):
+    quiz = get_quiz_for_user(quiz_id, session["user_id"])
+    if not quiz:
+        abort(404)
+    questions = get_quiz_questions(quiz_id)
+    if not questions:
+        return _quiz_error("This quiz has no valid questions.")
+    answers = []
+    score = 0
+    for question in questions:
+        submitted = (request.form.get(f"answer_{question['id']}") or "").strip()[:2000]
+        if question["question_type"] == "mcq":
+            is_correct = submitted == (question["correct_answer"] or "")
+        else:
+            is_correct = bool(submitted) and _normalize_answer(submitted) == _normalize_answer(question["expected_answer"])
+        score += int(is_correct)
+        answers.append({"question_id": question["id"], "submitted_answer": submitted, "is_correct": is_correct})
+    percentage = round((score / len(questions)) * 100, 2) if questions else 0
+    attempt_id = create_quiz_attempt(quiz_id, session["user_id"], score, len(questions), percentage, answers)
+    notify_quiz_completed(session["user_id"], quiz_id, attempt_id, quiz["title"], score, len(questions))
+    return redirect(url_for("quiz_result", quiz_id=quiz_id, attempt_id=attempt_id))
+
+@app.route("/quiz/<int:quiz_id>/result/<int:attempt_id>", methods=["GET"])
+@login_required
+def quiz_result(quiz_id, attempt_id):
+    attempt = get_quiz_attempt_for_user(attempt_id, session["user_id"])
+    if not attempt or attempt["quiz_id"] != quiz_id:
+        abort(404)
+    quiz = get_quiz_for_user(quiz_id, session["user_id"])
+    review = get_attempt_review(attempt_id)
+    return render_template("quiz_result.html", quiz=quiz, attempt=attempt, review=review)
+
+# ===========================================================================
 # Step 9: Public Study Notes Library Routes
 # ===========================================================================
 
 @app.route("/study-library", methods=["GET"])
 def study_library():
-    # Public library showing only administrator-approved study materials."
+    # Public approved-only library with validated search, filters, and sorting.
     departments = get_all_departments()
-    department_raw = (request.args.get("department_id") or "").strip()
-    course_raw = (request.args.get("course_id") or "").strip()
+    q = (request.args.get("q") or "").strip()[:120]
+    department_raw = (request.args.get("department_id") or request.args.get("department") or "").strip()
+    course_raw = (request.args.get("course_id") or request.args.get("course") or "").strip()
     exam_type = (request.args.get("exam_type") or "").strip().lower()
-    topic = (request.args.get("topic") or "").strip()
-    course_code = (request.args.get("course_code") or "").strip()
+    topic = (request.args.get("topic") or "").strip()[:120]
+    course_code = (request.args.get("course_code") or "").strip()[:80]
+    sort = (request.args.get("sort") or "relevance").strip().lower()
     page_raw = (request.args.get("page") or "1").strip()
-
     error = None
     department_id = None
     course_id = None
+    page = 1
     try:
         if department_raw:
             department_id = int(department_raw)
-            if not get_department_by_id(department_id):
-                raise ValueError
+            if department_id <= 0 or not get_department_by_id(department_id): raise ValueError
         if course_raw:
             course_id = int(course_raw)
             selected_course = get_course_by_id(course_id)
-            if not selected_course:
-                raise ValueError
-            if department_id is not None and selected_course["department_id"] != department_id:
-                raise ValueError
-        page = max(int(page_raw), 1)
-        if exam_type not in ("", "midterm", "final", "both"):
+            if not selected_course or (department_id is not None and selected_course["department_id"] != department_id): raise ValueError
+        page = int(page_raw)
+        if page < 1 or exam_type not in ("", "midterm", "final", "both") or sort not in ("relevance", "newest", "oldest", "title_asc", "title_desc"):
             raise ValueError
-        materials = get_approved_study_materials(
-            department_id=department_id,
-            course_id=course_id,
-            course_code=course_code,
-            exam_type=exam_type,
-            topic=topic,
-            page=page,
-            per_page=20,
-        )
-        total_count = count_approved_study_materials(
-            department_id=department_id,
-            course_id=course_id,
-            course_code=course_code,
-            exam_type=exam_type,
-            topic=topic,
-        )
+        materials = search_approved_study_materials(q, department_id, course_id, course_code, exam_type, topic, sort, page, 20)
+        total_count = count_search_approved_study_materials(q, department_id, course_id, course_code, exam_type, topic)
     except (ValueError, TypeError):
-        error = "Invalid department, course, exam type, or page filter."
-        materials = []
-        total_count = 0
-        page = 1
+        error = "Invalid search or filter values."
+        materials, total_count, page = [], 0, 1
     selected_department_id = department_id
     courses = get_courses_by_department(selected_department_id) if selected_department_id else []
     total_pages = max((total_count + 19) // 20, 1)
-    return render_template(
-        "study_library.html",
-        materials=materials,
-        departments=departments,
-        courses=courses,
-        selected_department_id=selected_department_id,
-        selected_course_id=course_id,
-        exam_type=exam_type,
-        topic=topic,
-        course_code=course_code,
-        page=page,
-        total_pages=total_pages,
-        error=error,
-    )
+    bookmarked_ids = get_bookmarked_material_ids(session["user_id"], [item["id"] for item in materials]) if session.get("user_id") else set()
+    return render_template("study_library.html", materials=materials, departments=departments, courses=courses,
+        selected_department_id=selected_department_id, selected_course_id=course_id, exam_type=exam_type,
+        topic=topic, course_code=course_code, q=q, sort=sort, page=page, total_pages=total_pages,
+        total_count=total_count, error=error, bookmarked_ids=bookmarked_ids)
 
 
 def _serve_approved_material(material_id: int, as_attachment: bool):
@@ -593,6 +719,103 @@ def study_library_material_pdf(material_id: int):
 def study_library_material_download(material_id: int):
     # Public download access for approved materials only."
     return _serve_approved_material(material_id, as_attachment=True)
+
+@app.route("/study-library/material/<int:material_id>/bookmark", methods=["POST"])
+@login_required
+def bookmark_material(material_id: int):
+    # Create an approved-material bookmark for the logged-in user.
+    material = get_study_material_details(material_id)
+    if not material or material["status"] != "approved":
+        if request.is_json or request.headers.get("Accept") == "application/json":
+            return jsonify({"success": False, "error": "Only approved materials can be bookmarked."}), 404
+        flash("Only approved materials can be bookmarked.", "error")
+        return redirect(url_for("study_library"))
+    add_bookmark(session["user_id"], material_id)
+    if request.is_json or request.headers.get("Accept") == "application/json":
+        return jsonify({"success": True, "bookmarked": True, "material_id": material_id}), 200
+    flash("Study material bookmarked.", "success")
+    return redirect(request.referrer or url_for("study_library"))
+
+@app.route("/study-library/material/<int:material_id>/unbookmark", methods=["POST"])
+@login_required
+def unbookmark_material(material_id: int):
+    # Remove only the logged-in user's bookmark.
+    remove_bookmark(session["user_id"], material_id)
+    if request.is_json or request.headers.get("Accept") == "application/json":
+        return jsonify({"success": True, "bookmarked": False, "material_id": material_id}), 200
+    flash("Bookmark removed.", "success")
+    return redirect(request.referrer or url_for("study_library"))
+
+@app.route("/my-bookmarks", methods=["GET"])
+@login_required
+def my_bookmarks():
+    # Show only approved materials bookmarked by the authenticated user.
+    q = (request.args.get("q") or "").strip()[:120]
+    department_raw = (request.args.get("department_id") or "").strip()
+    course_raw = (request.args.get("course_id") or "").strip()
+    course_code = (request.args.get("course_code") or "").strip()[:80]
+    exam_type = (request.args.get("exam_type") or "").strip().lower()
+    topic = (request.args.get("topic") or "").strip()[:120]
+    sort = (request.args.get("sort") or "recent").strip().lower()
+    page_raw = (request.args.get("page") or "1").strip()
+    department_id = course_id = None
+    error = None
+    try:
+        if department_raw:
+            department_id = int(department_raw)
+            if department_id <= 0 or not get_department_by_id(department_id): raise ValueError
+        if course_raw:
+            course_id = int(course_raw)
+            course = get_course_by_id(course_id)
+            if not course or (department_id is not None and course["department_id"] != department_id): raise ValueError
+        page = int(page_raw)
+        if page < 1 or exam_type not in ("", "midterm", "final", "both") or sort not in ("recent", "oldest", "material_newest", "material_oldest", "title_asc", "title_desc"): raise ValueError
+        materials = get_user_bookmarks(session["user_id"], q, department_id, course_id, course_code, exam_type, topic, sort, page, 20)
+        total_count = count_user_bookmarks(session["user_id"], q, department_id, course_id, course_code, exam_type, topic)
+    except (ValueError, TypeError):
+        error = "Invalid bookmark search or filter values."
+        materials, total_count, page = [], 0, 1
+    departments = get_all_departments()
+    courses = get_courses_by_department(department_id) if department_id else []
+    return render_template("my_bookmarks.html", materials=materials, departments=departments, courses=courses,
+        selected_department_id=department_id, selected_course_id=course_id, q=q, course_code=course_code,
+        exam_type=exam_type, topic=topic, sort=sort, page=page, total_count=total_count,
+        total_pages=max((total_count + 19) // 20, 1), error=error)
+
+# ===========================================================================
+# Step 14: In-app Notifications
+# ===========================================================================
+
+@app.route("/notifications", methods=["GET"])
+@login_required
+def notifications():
+    raw_page = (request.args.get("page") or "1").strip()
+    notification_type = (request.args.get("type") or "").strip().lower()
+    read_filter = (request.args.get("read") or "").strip().lower()
+    try:
+        page = int(raw_page)
+        rows = get_user_notifications(session["user_id"], page, 20, notification_type, read_filter)
+        total = count_user_notifications(session["user_id"], notification_type, read_filter)
+    except (ValueError, TypeError):
+        page, rows, total = 1, [], 0
+        flash("Invalid notification filters.", "error")
+    return render_template("notifications.html", notifications=rows, page=page, total_pages=max((total + 19) // 20, 1), total=total, notification_type=notification_type, read_filter=read_filter)
+
+@app.route("/notifications/<int:notification_id>/read", methods=["POST"])
+@login_required
+def notification_read(notification_id):
+    notification = get_notification_for_user(notification_id, session["user_id"])
+    if not notification:
+        abort(404)
+    mark_notification_as_read(session["user_id"], notification_id)
+    link = notification["link"] if notification["link"] and notification["link"].startswith("/") and not notification["link"].startswith("//") else url_for("notifications")
+    return redirect(link)
+
+@app.route("/notifications/read-all", methods=["POST"])
+@login_required
+def notifications_read_all():
+    mark_all_notifications_as_read(session["user_id"])
+    return redirect(request.referrer or url_for("notifications"))
 
 # ===========================================================================
 # Step 8: Admin Dashboard & Approval Workflow Routes
@@ -681,7 +904,9 @@ def admin_approve_material(material_id: int):
         flash("Study material not found.", "error")
         return redirect(url_for("admin_dashboard"))
 
-    update_study_material_status(material_id, "approved")
+    changed = update_study_material_status(material_id, "approved")
+    if changed:
+        notify_material_approved(material["uploaded_by"], material_id, material["topic"])
 
     if _admin_wants_json():
         return jsonify({
@@ -710,7 +935,9 @@ def admin_reject_material(material_id: int):
         flash("Study material not found.", "error")
         return redirect(url_for("admin_dashboard"))
 
-    update_study_material_status(material_id, "rejected")
+    changed = update_study_material_status(material_id, "rejected")
+    if changed:
+        notify_material_rejected(material["uploaded_by"], material_id, material["topic"])
 
     if _admin_wants_json():
         return jsonify({
@@ -737,15 +964,26 @@ def logout():
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    """
-    Sample protected student route verifying @login_required decorator.
-    """
+    # Show the authenticated student's dashboard while preserving the legacy JSON contract."
     current_user = get_current_user()
-    return jsonify({
-        "status": "authenticated",
-        "message": f"Welcome to your private study dashboard, {current_user['name']}!",
-        "user": current_user
-    }), 200
+    accept_header = request.headers.get("Accept", "")
+    wants_json = request.is_json or request.args.get("format") == "json" or ("text/html" not in accept_header and accept_header != "application/json") or accept_header == "application/json"
+    if wants_json:
+        return jsonify({
+            "status": "authenticated",
+            "message": f"Welcome to your private study dashboard, {current_user['name']}!",
+            "user": current_user
+        }), 200
+    user_id = session["user_id"]
+    return render_template(
+        "dashboard.html",
+        current_user=current_user,
+        stats=get_student_dashboard_stats(user_id),
+        course_progress=get_student_course_progress(user_id),
+        recent_materials=get_recent_student_materials(user_id),
+        recent_bookmarks=get_recent_student_bookmarks(user_id),
+        recent_quizzes=get_recent_student_quizzes(user_id),
+    )
 
 
 @app.route("/admin/verify")

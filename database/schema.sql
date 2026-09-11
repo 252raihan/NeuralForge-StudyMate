@@ -68,3 +68,93 @@ CREATE INDEX IF NOT EXISTS idx_study_materials_status ON study_materials(status)
 CREATE INDEX IF NOT EXISTS idx_study_materials_exam_type ON study_materials(exam_type);
 CREATE INDEX IF NOT EXISTS idx_study_materials_uploaded_by ON study_materials(uploaded_by);
 CREATE INDEX IF NOT EXISTS idx_study_materials_course_status ON study_materials(course_id, status);
+
+-- 5. QUIZZES TABLE (Step 10)
+CREATE TABLE IF NOT EXISTS quizzes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    material_id INTEGER NOT NULL,
+    created_by INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    question_type TEXT NOT NULL CHECK (question_type IN ('mcq', 'short', 'mixed')),
+    difficulty TEXT NOT NULL CHECK (difficulty IN ('easy', 'medium', 'hard', 'mixed')),
+    question_count INTEGER NOT NULL CHECK (question_count BETWEEN 1 AND 20),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (material_id) REFERENCES study_materials(id) ON DELETE RESTRICT,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
+);
+
+-- Correct answers are stored server-side and never rendered in the quiz form.
+CREATE TABLE IF NOT EXISTS quiz_questions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    quiz_id INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    question_type TEXT NOT NULL CHECK (question_type IN ('mcq', 'short')),
+    question_text TEXT NOT NULL,
+    options_json TEXT,
+    correct_answer TEXT,
+    expected_answer TEXT,
+    explanation TEXT NOT NULL,
+    difficulty TEXT NOT NULL CHECK (difficulty IN ('easy', 'medium', 'hard')),
+    FOREIGN KEY (quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE,
+    UNIQUE (quiz_id, position)
+);
+
+CREATE TABLE IF NOT EXISTS quiz_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    quiz_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    score INTEGER NOT NULL,
+    total_questions INTEGER NOT NULL,
+    percentage REAL NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS quiz_answers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    attempt_id INTEGER NOT NULL,
+    question_id INTEGER NOT NULL,
+    submitted_answer TEXT NOT NULL DEFAULT '',
+    is_correct INTEGER NOT NULL CHECK (is_correct IN (0, 1)),
+    FOREIGN KEY (attempt_id) REFERENCES quiz_attempts(id) ON DELETE CASCADE,
+    FOREIGN KEY (question_id) REFERENCES quiz_questions(id) ON DELETE RESTRICT,
+    UNIQUE (attempt_id, question_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_quizzes_created_by ON quizzes(created_by);
+CREATE INDEX IF NOT EXISTS idx_quizzes_material_id ON quizzes(material_id);
+CREATE INDEX IF NOT EXISTS idx_quiz_questions_quiz_id ON quiz_questions(quiz_id);
+CREATE INDEX IF NOT EXISTS idx_quiz_attempts_user_id ON quiz_attempts(user_id);
+
+-- 6. BOOKMARKS TABLE (Step 12)
+CREATE TABLE IF NOT EXISTS bookmarks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    material_id INTEGER NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (material_id) REFERENCES study_materials(id) ON DELETE CASCADE,
+    UNIQUE (user_id, material_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bookmarks_user_id ON bookmarks(user_id);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_material_id ON bookmarks(material_id);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_user_created ON bookmarks(user_id, created_at);
+
+-- 7. IN-APP NOTIFICATIONS (Step 14)
+CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('material_approved', 'material_rejected', 'quiz_completed', 'new_material')),
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    link TEXT,
+    is_read INTEGER NOT NULL DEFAULT 0 CHECK (is_read IN (0, 1)),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, is_read);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at);

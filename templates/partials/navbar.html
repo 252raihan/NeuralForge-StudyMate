@@ -12,8 +12,11 @@
       <div class="hidden md:flex items-center gap-6 text-sm font-medium">
         <a href="{{ url_for('study_library') }}" id="nav-study-library" class="text-slate-300 hover:text-white transition">📚 Study Library</a>
         {% if session.get('user_id') %}
+          <a href="{{ url_for('dashboard') }}" id="nav-dashboard-link" class="text-slate-300 hover:text-white transition">🏠 Dashboard</a>
+          <a href="{{ url_for('notifications') }}" id="nav-notifications-link" class="text-slate-300 hover:text-white transition">🔔 Notifications{% if unread_notification_count %} <span class="rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] text-white">{{ unread_notification_count }}</span>{% endif %}</a>
           <a href="{{ url_for('upload_study_material') }}" class="text-brand-300 hover:text-white transition font-semibold">Upload Material</a>
           <a href="{{ url_for('my_study_materials') }}" class="text-slate-300 hover:text-white transition">My Materials</a>
+          <a href="{{ url_for('my_bookmarks') }}" id="nav-bookmarks-link" class="text-amber-300 hover:text-white transition">⭐ My Bookmarks</a>
           {% if session.get('user_role') == 'admin' %}
             <a href="{{ url_for('admin_dashboard') }}" id="nav-admin-link" class="text-purple-300 hover:text-white transition font-semibold">Admin Dashboard</a>
           {% endif %}
@@ -66,8 +69,11 @@
   <div id="mobile-menu" class="hidden md:hidden px-4 pb-4 pt-2 space-y-2 bg-slate-950/95 border-t border-white/5">
     <a href="{{ url_for('study_library') }}" class="block px-3 py-2 rounded-lg text-slate-300 hover:bg-white/5 hover:text-white transition">📚 Study Library</a>
     {% if session.get('user_id') %}
+      <a href="{{ url_for('dashboard') }}" id="nav-dashboard-link-mobile" class="block px-3 py-2 rounded-lg text-slate-300 hover:bg-white/5 transition">🏠 Dashboard</a>
+      <a href="{{ url_for('notifications') }}" id="nav-notifications-link-mobile" class="block px-3 py-2 rounded-lg text-slate-300 hover:bg-white/5 transition">🔔 Notifications{% if unread_notification_count %} ({{ unread_notification_count }}){% endif %}</a>
       <a href="{{ url_for('upload_study_material') }}" class="block px-3 py-2 rounded-lg text-brand-300 hover:bg-white/5 font-semibold transition">Upload Study Material</a>
       <a href="{{ url_for('my_study_materials') }}" class="block px-3 py-2 rounded-lg text-slate-300 hover:bg-white/5 transition">My Study Materials</a>
+      <a href="{{ url_for('my_bookmarks') }}" class="block px-3 py-2 rounded-lg text-amber-300 hover:bg-white/5 transition">⭐ My Bookmarks</a>
       {% if session.get('user_role') == 'admin' %}
         <a href="{{ url_for('admin_dashboard') }}" id="nav-admin-link-mobile" class="block px-3 py-2 rounded-lg text-purple-300 hover:bg-white/5 font-semibold transition">Admin Dashboard</a>
       {% endif %}

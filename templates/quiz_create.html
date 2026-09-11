@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Generate Quiz | NeuralForge StudyMate{% endblock %}
+{% block content %}
+<section class="max-w-3xl mx-auto px-4 py-16">
+  <div class="rounded-2xl border border-white/10 bg-slate-900/80 p-6">
+    <p class="text-brand-300 text-sm font-semibold">🧠 AI Quiz Generator</p>
+    <h1 class="mt-2 text-3xl font-extrabold text-white">{{ material.topic }}</h1>
+    <p class="mt-2 text-slate-300">{{ material.course_code }} · {{ material.course_name }} · {{ material.department_code
+      }}</p>
+    <p class="mt-1 text-sm text-slate-400">Approved study material · {{ material.exam_type|capitalize }}</p>
+    <form method="POST" action="{{ url_for('quiz_generate', material_id=material.id) }}" class="mt-8 space-y-5">
+      <div><label for="question_type" class="block text-sm font-semibold text-slate-200 mb-2">Question
+          type</label><select id="question_type" name="question_type" class="form-select w-full" required>
+          <option value="mcq">Multiple choice (MCQ)</option>
+          <option value="short">Short questions</option>
+          <option value="mixed">Mixed (50% MCQ / 50% short)</option>
+        </select></div>
+      <div><label for="difficulty" class="block text-sm font-semibold text-slate-200 mb-2">Difficulty</label><select
+          id="difficulty" name="difficulty" class="form-select w-full" required>
+          <option value="easy">Easy</option>
+          <option value="medium" selected>Medium</option>
+          <option value="hard">Hard</option>
+          <option value="mixed">Mixed difficulty</option>
+        </select></div>
+      <div><label for="question_count" class="block text-sm font-semibold text-slate-200 mb-2">Number of questions
+          (1–20)</label><input id="question_count" name="question_count" type="number" min="1" max="20" value="5"
+          class="form-input w-full" required></div>
+      <button type="submit"
+        class="w-full rounded-lg bg-brand-600 hover:bg-brand-500 px-4 py-3 text-white font-bold">Generate Quiz</button>
+    </form>
+  </div>
+</section>
+{% endblock %}

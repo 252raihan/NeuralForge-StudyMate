@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Quiz Result | NeuralForge StudyMate{% endblock %}
+{% block content %}
+<section class="max-w-3xl mx-auto px-4 py-12">
+  <div class="rounded-2xl border border-emerald-500/20 bg-slate-900/80 p-6 mb-6">
+    <p class="text-brand-300 text-sm">{{ quiz.topic }} · {{ quiz.course_code }}</p>
+    <h1 class="text-3xl font-extrabold text-white mt-1">{{ quiz.title }}</h1>
+    <div class="mt-5 grid grid-cols-3 gap-3 text-center">
+      <div>
+        <p class="text-2xl font-bold text-white">{{ attempt.score }}/{{ attempt.total_questions }}</p>
+        <p class="text-xs text-slate-400">Correct</p>
+      </div>
+      <div>
+        <p class="text-2xl font-bold text-emerald-300">{{ attempt.percentage }}%</p>
+        <p class="text-xs text-slate-400">Score</p>
+      </div>
+      <div>
+        <p class="text-2xl font-bold text-white">{{ attempt.total_questions - attempt.score }}</p>
+        <p class="text-xs text-slate-400">Incorrect</p>
+      </div>
+    </div>
+  </div>
+  <div class="space-y-4">{% for item in review %}<article
+      class="rounded-2xl border border-white/10 bg-slate-900/80 p-5">
+      <div class="flex justify-between gap-3">
+        <h2 class="font-bold text-white">{{ loop.index }}. {{ item.question_text }}</h2><span
+          class="text-sm {% if item.is_correct %}text-emerald-300{% else %}text-rose-300{% endif %}">{% if
+          item.is_correct %}Correct{% else %}Incorrect{% endif %}</span>
+      </div>
+      <p class="mt-3 text-sm text-slate-300"><strong>Your answer:</strong> {{ item.submitted_answer or 'No answer' }}
+      </p>
+      <p class="mt-2 text-sm text-slate-300"><strong>Correct answer:</strong> {{ item.correct_answer or
+        item.expected_answer }}</p>
+      <p class="mt-2 text-sm text-slate-400"><strong>Explanation:</strong> {{ item.explanation }}</p>
+    </article>{% endfor %}</div>
+</section>
+{% endblock %}

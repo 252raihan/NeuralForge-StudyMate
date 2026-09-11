@@ -3,6 +3,7 @@ body { background-image: radial-gradient(circle at 50% -20%, rgba(91,108,255,.13
 .hero-glow { position:absolute; border-radius:9999px; filter:blur(80px); pointer-events:none; opacity:.28; }
 .hero-glow-one { width:20rem; height:20rem; top:5rem; left:-8rem; background:#5b6cff; }
 .hero-glow-two { width:16rem; height:16rem; top:12rem; right:-5rem; background:#9333ea; }
+@media (max-width: 640px) { .hero-glow { max-width:100vw; } .hero-glow-two { right:0; } }
 .gradient-text { background:linear-gradient(110deg,#a5b4fc,#67e8f9 55%,#c084fc); -webkit-background-clip:text; background-clip:text; color:transparent; }
 .feature-card { padding:1.75rem; border:1px solid rgba(255,255,255,.08); border-radius:1rem; background:rgba(255,255,255,.035); transition:transform .3s ease, border-color .3s ease, background .3s ease; }
 .feature-card:hover { transform:translateY(-5px); border-color:rgba(91,108,255,.45); background:rgba(91,108,255,.07); }
