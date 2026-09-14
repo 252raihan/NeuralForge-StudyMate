@@ -41,6 +41,10 @@ def init_db(db_path: Optional[Path] = None) -> None:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(study_materials)")}
         if "extracted_text" not in columns:
             conn.execute("ALTER TABLE study_materials ADD COLUMN extracted_text TEXT")
+        if "content_hash" not in columns:
+            conn.execute("ALTER TABLE study_materials ADD COLUMN content_hash TEXT")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_study_materials_content_hash ON study_materials(content_hash) WHERE content_hash IS NOT NULL")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_generated_attempt ON generated_quiz_attempts(quiz_id, user_id) WHERE submitted_at IS NULL")
         conn.commit()
     finally:
         conn.close()
@@ -332,6 +336,7 @@ def create_study_material(
     uploaded_by: int,
     status: str = "pending",
     extracted_text: Optional[str] = None,
+    content_hash: Optional[str] = None,
     conn: Optional[sqlite3.Connection] = None
 ) -> int:
     """
@@ -357,10 +362,10 @@ def create_study_material(
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO study_materials (course_id, topic, exam_type, file_path, uploaded_by, status)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO study_materials (course_id, topic, exam_type, file_path, uploaded_by, status, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (course_id, topic.strip(), exam_type, file_path.strip(), uploaded_by, status)
+            (course_id, topic.strip(), exam_type, file_path.strip(), uploaded_by, status, content_hash)
         )
         material_id = cursor.lastrowid
         # Store extracted PDF text separately (named parameter avoids placeholder limits).
@@ -372,6 +377,16 @@ def create_study_material(
         return material_id
     finally:
         if close_on_exit:
+            conn.close()
+
+
+def get_material_by_content_hash(content_hash: str, conn: Optional[sqlite3.Connection] = None) -> Optional[sqlite3.Row]:
+    own = conn is None
+    conn = conn or get_db_connection()
+    try:
+        return conn.execute("SELECT * FROM study_materials WHERE content_hash = ?", (content_hash,)).fetchone()
+    finally:
+        if own:
             conn.close()
 
 
@@ -693,12 +708,22 @@ def create_generated_quiz_attempt(quiz_id: int, user_id: int, total_questions: i
     conn = conn or get_db_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO generated_quiz_attempts (quiz_id, user_id, total_questions) VALUES (?, ?, ?)",
-            (quiz_id, user_id, total_questions),
-        )
-        conn.commit()
-        return cursor.lastrowid
+        try:
+            cursor.execute(
+                "INSERT INTO generated_quiz_attempts (quiz_id, user_id, total_questions) VALUES (?, ?, ?)",
+                (quiz_id, user_id, total_questions),
+            )
+            conn.commit()
+            return cursor.lastrowid
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            existing = conn.execute(
+                "SELECT id FROM generated_quiz_attempts WHERE quiz_id = ? AND user_id = ? AND submitted_at IS NULL ORDER BY id DESC LIMIT 1",
+                (quiz_id, user_id),
+            ).fetchone()
+            if existing:
+                return existing["id"]
+            raise
     finally:
         if own:
             conn.close()
@@ -1237,191 +1262,26 @@ def count_approved_study_materials(
     topic: str = "",
     conn: Optional[sqlite3.Connection] = None,
 ) -> int:
-    # Count approved materials using the same filters as the library query.
-    # Keep count behavior aligned by querying IDs with a generous bounded limit.
-    # The library only needs a boolean/count for pagination display.
-    rows = get_approved_study_materials(
-        department_id, course_id, course_code, exam_type, topic,
-        page=1, per_page=100000, conn=conn
-    )
-    return len(rows)
+    clauses = ["sm.status = 'approved'"]; params: List[Any] = []
+    if department_id is not None: clauses.append("c.department_id = ?"); params.append(department_id)
+    if course_id is not None: clauses.append("sm.course_id = ?"); params.append(course_id)
+    if course_code: clauses.append("c.course_code LIKE ? COLLATE NOCASE"); params.append(f"%{course_code.strip()}%")
+    if exam_type: clauses.append("sm.exam_type = ?"); params.append(exam_type)
+    if topic: clauses.append("sm.topic LIKE ? COLLATE NOCASE"); params.append(f"%{topic.strip()}%")
+    own = conn is None; conn = conn or get_db_connection()
+    try:
+        return int(conn.execute("SELECT COUNT(*) FROM study_materials sm JOIN courses c ON sm.course_id=c.id WHERE " + " AND ".join(clauses), params).fetchone()[0])
+    finally:
+        if own: conn.close()
 
 
 # ---------------------------------------------------------------------------
 # Quiz Data Access Functions (Step 10)
 # ---------------------------------------------------------------------------
 
-def create_quiz(material_id: int, created_by: int, title: str, question_type: str,
-                difficulty: str, question_count: int,
-                questions: List[Dict[str, Any]], conn: Optional[sqlite3.Connection] = None) -> int:
-    # Persist a generated quiz and its answer key in one transaction.
-    close_on_exit = False
-    if conn is None:
-        conn = get_db_connection()
-        close_on_exit = True
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO quizzes (material_id, created_by, title, question_type, difficulty, question_count) VALUES (?, ?, ?)",
-            (material_id, created_by, title.strip(), question_type, difficulty, question_count),
-        )
-        quiz_id = cursor.lastrowid
-        for position, question in enumerate(questions, start=1):
-            cursor.execute(
-                "INSERT INTO quiz_questions (quiz_id, position, question_type, question_text, options_json, correct_answer, expected_answer, explanation, difficulty) VALUES (?, ?, ?)","",
-                (quiz_id, position, question["question_type"], question["question"],
-                 question.get("options_json"), question.get("correct_answer"),
-                 question.get("expected_answer"), question["explanation"], question["difficulty"]),
-            )
-        conn.commit()
-        return quiz_id
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        if close_on_exit:
-            conn.close()
-
-
-def get_quiz_for_user(quiz_id: int, user_id: int, conn: Optional[sqlite3.Connection] = None) -> Optional[sqlite3.Row]:
-    # Return a quiz only when owned by the authenticated user.
-    close_on_exit = False
-    if conn is None:
-        conn = get_db_connection(); close_on_exit = True
-    try:
-        return conn.execute(
-            "SELECT q.*, sm.topic, c.course_name, c.course_code, d.code AS department_code FROM quizzes q JOIN study_materials sm ON q.material_id = sm.id JOIN courses c ON sm.course_id = c.id JOIN departments d ON c.department_id = d.id WHERE q.id = ? AND q.created_by = ?", (quiz_id, user_id)
-        ).fetchone()
-    finally:
-        if close_on_exit: conn.close()
-
-
-def get_quiz_questions(quiz_id: int, conn: Optional[sqlite3.Connection] = None) -> List[sqlite3.Row]:
-    close_on_exit = False
-    if conn is None: conn = get_db_connection(); close_on_exit = True
-    try:
-        return conn.execute("SELECT * FROM quiz_questions WHERE quiz_id = ? ORDER BY position", (quiz_id,)).fetchall()
-    finally:
-        if close_on_exit: conn.close()
-
-
-def create_quiz_attempt(quiz_id: int, user_id: int, score: int, total: int, percentage: float,
-                       answers: List[Dict[str, Any]], conn: Optional[sqlite3.Connection] = None) -> int:
-    close_on_exit = False
-    if conn is None: conn = get_db_connection(); close_on_exit = True
-    try:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO quiz_attempts (quiz_id, user_id, score, total_questions, percentage) VALUES (?, ?, ?)",
-                       (quiz_id, user_id, score, total, percentage))
-        attempt_id = cursor.lastrowid
-        for answer in answers:
-            cursor.execute("INSERT INTO quiz_answers (attempt_id, question_id, submitted_answer, is_correct) VALUES (?, ?, ?)",
-                           (attempt_id, answer["question_id"], answer["submitted_answer"], int(answer["is_correct"])))
-        conn.commit()
-        return attempt_id
-    except Exception:
-        conn.rollback(); raise
-    finally:
-        if close_on_exit: conn.close()
-
-
-def get_quiz_attempt_for_user(attempt_id: int, user_id: int, conn: Optional[sqlite3.Connection] = None) -> Optional[sqlite3.Row]:
-    close_on_exit = False
-    if conn is None: conn = get_db_connection(); close_on_exit = True
-    try:
-        return conn.execute("SELECT a.*, q.title, q.created_by, q.material_id FROM quiz_attempts a JOIN quizzes q ON a.quiz_id = q.id WHERE a.id = ? AND a.user_id = ?", (attempt_id, user_id)).fetchone()
-    finally:
-        if close_on_exit: conn.close()
-
-
-def get_attempt_review(attempt_id: int, conn: Optional[sqlite3.Connection] = None) -> List[sqlite3.Row]:
-    close_on_exit = False
-    if conn is None: conn = get_db_connection(); close_on_exit = True
-    try:
-        return conn.execute("SELECT qq.*, qa.submitted_answer, qa.is_correct FROM quiz_answers qa JOIN quiz_questions qq ON qa.question_id = qq.id WHERE qa.attempt_id = ? ORDER BY qq.position", (attempt_id,)).fetchall()
-    finally:
-        if close_on_exit: conn.close()
-
-
-# Step 10 corrected quiz persistence helpers (defined after legacy helpers).
-def create_quiz(material_id: int, created_by: int, title: str, question_type: str,
-                difficulty: str, question_count: int, questions: List[Dict[str, Any]],
-                conn: Optional[sqlite3.Connection] = None) -> int:
-    close_on_exit = False
-    if conn is None:
-        conn = get_db_connection(); close_on_exit = True
-    try:
-        cur = conn.cursor()
-        cur.execute("INSERT INTO quizzes (material_id, created_by, title, question_type, difficulty, question_count) VALUES (?, ?, ?)",
-                    (material_id, created_by, title.strip(), question_type, difficulty, question_count))
-        quiz_id = cur.lastrowid
-        for position, question in enumerate(questions, 1):
-            cur.execute("INSERT INTO quiz_questions (quiz_id, position, question_type, question_text, options_json, correct_answer, expected_answer, explanation, difficulty) VALUES (?, ?, ?)",
-                        (quiz_id, position, question["question_type"], question["question"], question.get("options_json"), question.get("correct_answer"), question.get("expected_answer"), question["explanation"], question["difficulty"]))
-        conn.commit()
-        return quiz_id
-    except Exception:
-        conn.rollback(); raise
-    finally:
-        if close_on_exit: conn.close()
-
-
-def create_quiz_attempt(quiz_id: int, user_id: int, score: int, total: int, percentage: float,
-                        answers: List[Dict[str, Any]], conn: Optional[sqlite3.Connection] = None) -> int:
-    close_on_exit = False
-    if conn is None:
-        conn = get_db_connection(); close_on_exit = True
-    try:
-        cur = conn.cursor()
-        cur.execute("INSERT INTO quiz_attempts (quiz_id, user_id, score, total_questions, percentage) VALUES (?, ?, ?)",
-                    (quiz_id, user_id, score, total, percentage))
-        attempt_id = cur.lastrowid
-        for answer in answers:
-            cur.execute("INSERT INTO quiz_answers (attempt_id, question_id, submitted_answer, is_correct) VALUES (?, ?, ?)",
-                        (attempt_id, answer["question_id"], answer["submitted_answer"], int(answer["is_correct"])))
-        conn.commit(); return attempt_id
-    except Exception:
-        conn.rollback(); raise
-    finally:
-        if close_on_exit: conn.close()
-
-
-# Final Step 10 SQL implementations.
-def create_quiz(material_id: int, created_by: int, title: str, question_type: str, difficulty: str, question_count: int, questions: List[Dict[str, Any]], conn: Optional[sqlite3.Connection] = None) -> int:
-    close_on_exit = False
-    if conn is None:
-        conn = get_db_connection(); close_on_exit = True
-    try:
-        cur = conn.cursor()
-        cur.execute("INSERT INTO quizzes (material_id, created_by, title, question_type, difficulty, question_count) VALUES (?, ?, ?)", (material_id, created_by, title.strip(), question_type, difficulty, question_count))
-        quiz_id = cur.lastrowid
-        for position, question in enumerate(questions, 1):
-            cur.execute("INSERT INTO quiz_questions (quiz_id, position, question_type, question_text, options_json, correct_answer, expected_answer, explanation, difficulty) VALUES (?, ?, ?)", (quiz_id, position, question["question_type"], question["question"], question.get("options_json"), question.get("correct_answer"), question.get("expected_answer"), question["explanation"], question["difficulty"]))
-        conn.commit(); return quiz_id
-    except Exception:
-        conn.rollback(); raise
-    finally:
-        if close_on_exit: conn.close()
-
-
-def create_quiz_attempt(quiz_id: int, user_id: int, score: int, total: int, percentage: float, answers: List[Dict[str, Any]], conn: Optional[sqlite3.Connection] = None) -> int:
-    close_on_exit = False
-    if conn is None:
-        conn = get_db_connection(); close_on_exit = True
-    try:
-        cur = conn.cursor()
-        cur.execute("INSERT INTO quiz_attempts (quiz_id, user_id, score, total_questions, percentage) VALUES (?, ?, ?)", (quiz_id, user_id, score, total, percentage))
-        attempt_id = cur.lastrowid
-        for answer in answers:
-            cur.execute("INSERT INTO quiz_answers (attempt_id, question_id, submitted_answer, is_correct) VALUES (?, ?, ?)", (attempt_id, answer["question_id"], answer["submitted_answer"], int(answer["is_correct"])))
-        conn.commit(); return attempt_id
-    except Exception:
-        conn.rollback(); raise
-    finally:
-        if close_on_exit: conn.close()
-
-
-# Definitive Step 10 persistence implementations.
+# Canonical Step 10 quiz persistence implementation (single source of truth).
+# NOTE: earlier duplicate/overridden copies of these functions were removed during
+# the Step 14.5 cleanup. Do not reintroduce duplicated definitions below this line.
 def create_quiz(material_id, created_by, title, question_type, difficulty, question_count, questions, conn=None):
     own = conn is None
     conn = conn or get_db_connection()
@@ -1662,8 +1522,20 @@ def get_user_bookmarks(user_id: int, query_text: str = "", department_id: Option
 
 
 def count_user_bookmarks(user_id: int, query_text: str = "", department_id: Optional[int] = None, course_id: Optional[int] = None, course_code: str = "", exam_type: str = "", topic: str = "", conn: Optional[sqlite3.Connection] = None) -> int:
-    rows = get_user_bookmarks(user_id, query_text, department_id, course_id, course_code, exam_type, topic, "recent", 1, 100000, conn)
-    return len(rows)
+    clauses = ["b.user_id = ?", "sm.status = 'approved'"]; params: List[Any] = [user_id]
+    clean = (query_text or "").strip()[:120]
+    if clean:
+        pattern = f"%{clean}%"; clauses.append("(sm.topic LIKE ? COLLATE NOCASE OR c.course_name LIKE ? COLLATE NOCASE OR c.course_code LIKE ? COLLATE NOCASE OR d.code LIKE ? COLLATE NOCASE)"); params.extend([pattern] * 4)
+    if department_id is not None: clauses.append("c.department_id = ?"); params.append(department_id)
+    if course_id is not None: clauses.append("sm.course_id = ?"); params.append(course_id)
+    if course_code: clauses.append("c.course_code LIKE ? COLLATE NOCASE"); params.append(f"%{course_code.strip()}%")
+    if exam_type: clauses.append("sm.exam_type = ?"); params.append(exam_type)
+    if topic: clauses.append("sm.topic LIKE ? COLLATE NOCASE"); params.append(f"%{topic.strip()}%")
+    own = conn is None; conn = conn or get_db_connection()
+    try:
+        return int(conn.execute("SELECT COUNT(*) FROM bookmarks b JOIN study_materials sm ON b.material_id=sm.id JOIN courses c ON sm.course_id=c.id JOIN departments d ON c.department_id=d.id WHERE " + " AND ".join(clauses), params).fetchone()[0])
+    finally:
+        if own: conn.close()
 
 
 # ---------------------------------------------------------------------------
