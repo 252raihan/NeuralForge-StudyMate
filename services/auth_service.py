@@ -4,11 +4,13 @@ Handles user registration, authentication verification, session management,
 and access control decorators (@login_required, @admin_required).
 """
 
+import logging
 import re
 from functools import wraps
 from typing import Optional, Dict, Any, Tuple
 from flask import session, redirect, url_for, flash, request, abort
 from werkzeug.security import generate_password_hash, check_password_hash
+logger = logging.getLogger("studymate")
 
 from database.db import (
     get_user_by_email,
@@ -20,6 +22,34 @@ from database.db import (
 
 # Email validation regex (standard RFC 5322 simplified pattern)
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
+
+# Password policy (Step 14.5 hardening).
+# A reasonable minimum for a study-notes app: long enough to matter, without
+# forcing awkward character-class rules that hurt usability.
+MIN_PASSWORD_LENGTH = 8
+MAX_PASSWORD_LENGTH = 128  # bound hashing work / reject absurd payloads
+# A very short deny-list of the most trivially guessable passwords. Kept
+# deliberately small so common-but-legitimate study passwords (e.g. those
+# containing the word "password") are not rejected unnecessarily.
+COMMON_WEAK_PASSWORDS = frozenset({
+    "password", "12345678", "123456789", "qwertyuiop", "abcdefgh", "11111",
+})
+
+
+def validate_password_strength(password: str) -> Tuple[bool, Optional[str]]:
+    # Validate a raw password against the project password policy.
+    # Returns (is_valid, error_message). Never stores or logs the password.
+    if not password:
+        return False, "Password is required."
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return False, f"Password must be at least {MIN_PASSWORD_LENGTH} characters long."
+    if len(password) > MAX_PASSWORD_LENGTH:
+        return False, f"Password must be at most {MAX_PASSWORD_LENGTH} characters long."
+    if password.strip() == "":
+        return False, "Password cannot be only whitespace."
+    if password.casefold() in COMMON_WEAK_PASSWORDS:
+        return False, "That password is too common. Please choose a stronger one."
+    return True, None
 
 
 def validate_email_format(email: str) -> bool:
@@ -42,7 +72,7 @@ def register_student(
     - Validates presence of all fields.
     - Validates email format.
     - Enforces password confirmation match.
-    - Ensures password length >= 6 characters.
+    - Enforces the project password policy (see validate_password_strength).
     - Verifies department exists in the database.
     - Prevents duplicate email accounts (case-insensitive).
     - Uses Werkzeug generate_password_hash().
@@ -63,15 +93,11 @@ def register_student(
     if not validate_email_format(clean_email):
         return False, "Please enter a valid email address.", None
 
-    if not password:
-        return False, "Password is required.", None
-
-    if len(password) < 6:
-        return False, "Password must be at least 6 characters long.", None
-
+    password_ok, password_error = validate_password_strength(password)
+    if not password_ok:
+        return False, password_error, None
     if not confirm_password:
         return False, "Please confirm your password.", None
-
     if password != confirm_password:
         return False, "Passwords do not match.", None
 
@@ -106,8 +132,10 @@ def register_student(
             role="student"
         )
         return True, None, new_user_id
-    except Exception as exc:
-        return False, f"Failed to register user: {str(exc)}", None
+    except Exception:
+        # SECURITY: never surface raw exception text (may contain SQL/paths).
+        logger.exception("Student registration failed for %s", clean_email)
+        return False, "We could not create your account right now. Please try again later.", None
 
 
 def authenticate_user(email: str, password: str) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
@@ -212,9 +240,12 @@ def admin_required(view_func):
             flash("Administrator login required.", "warning")
             return redirect(url_for("login", next=request.path))
 
-        user_role = session.get("user_role")
-        if user_role != "admin":
-            # Reject non-admin access
+        # SECURITY: re-read the role from the LIVE database on every admin request.
+        # A stale or forged session role must never grant admin access after a
+        # role change; authorization never trusts the session copy.
+        user_row = get_user_by_id(user_id)
+        if not user_row or user_row["role"] != "admin":
+            session.pop("user_role", None)
             flash("Access denied. Administrator privileges required.", "error")
             return abort(403)
 

@@ -24,6 +24,10 @@ def run_auth_tests():
     print("RUNNING STEP 6 USER AUTHENTICATION TEST SUITE")
     print("==================================================")
 
+    # Consistent with the other step suites: disable CSRF only inside the test
+    # client so POSTs don't need a per-session token. Production protection is
+    # unchanged (see test_security_step15 for CSRF coverage).
+    app.config["TESTING"] = True
     client = app.test_client()
 
     with app.app_context():
@@ -184,8 +188,10 @@ def run_auth_tests():
     print(">> TEST 11 PASSED: Session securely created with minimal identifiers!")
 
     # 12. Logout clears session -> PASS
+    # Logout is POST-only (GET /logout must not mutate state and returns 405).
     print("\n--- Test 12: Logout clears session ---")
-    logout_resp = session_client.get("/logout", follow_redirects=False)
+    assert session_client.get("/logout").status_code == 405, "GET /logout must not be allowed"
+    logout_resp = session_client.post("/logout", follow_redirects=False)
     assert logout_resp.status_code == 302
     assert "/login" in logout_resp.headers.get("Location")
 

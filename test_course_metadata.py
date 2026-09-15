@@ -26,6 +26,9 @@ from pathlib import Path
 from app import app
 
 def run_metadata_tests():
+    # Consistent with the other step suites: CSRF is disabled only for the test
+    # client; production CSRF protection is covered by test_security_step15.
+    app.config["TESTING"] = True
     client = app.test_client()
     pdf_path = Path("sample_study_guide.pdf")
     assert pdf_path.exists(), "sample_study_guide.pdf must exist before running tests"

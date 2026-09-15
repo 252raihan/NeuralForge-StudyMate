@@ -6,10 +6,12 @@ Step 4: PDF upload, text extraction, and AI summarization.
 import os
 import datetime
 import json
+import hashlib
 import hmac
 import logging
 import secrets
 import time
+import uuid
 from collections import defaultdict
 from pathlib import Path
 from werkzeug.exceptions import HTTPException
@@ -42,6 +44,7 @@ from database.db import (
     get_courses_by_department,
     get_user_by_id,
     create_study_material,
+    get_material_by_content_hash,
     get_study_materials_by_user,
     get_pending_study_materials,
     get_study_material_details,
@@ -181,26 +184,45 @@ def security_context():
     }
 
 
+# Endpoints that are intentionally exempt from the CSRF token check. Keep this
+# list EMPTY unless an endpoint is genuinely unauthenticated AND cannot obtain a
+# session token (e.g. a signed third-party webhook). JSON endpoints are NOT
+# exempt: every state-changing request (form, multipart, or JSON) must carry the
+# token, whether it arrives as a form field, the X-CSRF-Token header, or a
+# "csrf_token" field in a JSON body.
+CSRF_EXEMPT_ENDPOINTS = frozenset()
+
+
 def _csrf_valid():
+    # Validate the request's CSRF token against the session token.
+    # The token may be supplied as a form field named csrf_token (classic HTML
+    # form / multipart), the X-CSRF-Token request header (fetch/XHR JSON
+    # clients), or a csrf_token field inside a JSON body (belt-and-braces).
+    # A constant-time comparison avoids leaking the token through timing.
     supplied = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token")
+    if not supplied and request.is_json:
+        body = request.get_json(silent=True)
+        if isinstance(body, dict):
+            supplied = body.get("csrf_token")
     expected = session.get("csrf_token")
     return bool(supplied and expected and hmac.compare_digest(str(supplied), str(expected)))
 
 @app.before_request
 def protect_state_changing_requests():
+    # Ensure every session (including anonymous page views) has a CSRF token so
+    # the rendered pages can embed it into forms and fetch calls.
     if "csrf_token" not in session:
         session["csrf_token"] = secrets.token_urlsafe(32)
+    # Safe methods never mutate state and are not CSRF-protected.
     if request.method in {"GET", "HEAD", "OPTIONS"}:
         return None
     if not app.config.get("CSRF_PROTECTION", True) or app.config.get("TESTING"):
         return None
-    if request.endpoint in {"upload_pdf", "summarize_text"} and request.is_json:
+    if request.endpoint in CSRF_EXEMPT_ENDPOINTS:
         return None
-    if request.endpoint in {"quiz_generate_api", "quiz_submit_api"} and request.is_json:
-        # Auth + rate-limit protected JSON APIs; the UI also sends X-CSRF-Token.
-        return None
+    # SECURITY: all state-changing requests are validated, including JSON APIs.
     if not _csrf_valid():
-        logger.warning("CSRF validation failed for %s", request.path)
+        logger.warning("CSRF validation failed for %s %s", request.method, request.path)
         return jsonify({"success": False, "error": "Invalid or missing security token."}), 400
     return None
 @app.after_request
@@ -229,17 +251,27 @@ def _has_pdf_signature(file_storage) -> bool:
             return False
 
 def _rate_limited(bucket: str, limit: int, window_seconds: int = 60) -> bool:
-        if app.config.get("TESTING"):
-            return False
-        now = time.monotonic()
-        key = f"{bucket}:{request.remote_addr or 'unknown'}"
-        recent = [stamp for stamp in _rate_buckets[key] if now - stamp < window_seconds]
-        if len(recent) >= limit:
-            _rate_buckets[key] = recent
-            return True
-        recent.append(now)
-        _rate_buckets[key] = recent
+    # Return True when the caller has exceeded the bucket's allowance.
+    #
+    # PROTOTYPE LIMITATION: this uses a per-process in-memory sliding window
+    # keyed by client IP. It is sufficient for a single-process demonstration,
+    # but in a production multi-worker / multi-host deployment each worker keeps
+    # its own counters, so the effective limit multiplies. A real deployment must
+    # move this to a centralized store (e.g. Redis or a DB-backed limiter).
+    #
+    # The window is intentionally small and bounded so a burst of traffic cannot
+    # grow the buckets without limit.
+    if app.config.get("TESTING"):
         return False
+    now = time.monotonic()
+    key = f"{bucket}:{request.remote_addr or 'unknown'}"
+    recent = [stamp for stamp in _rate_buckets[key] if now - stamp < window_seconds]
+    if len(recent) >= limit:
+        _rate_buckets[key] = recent
+        return True
+    recent.append(now)
+    _rate_buckets[key] = recent
+    return False
 @app.route("/")
 def home():
     """Home route - shows landing page with PDF upload studio."""
@@ -359,7 +391,10 @@ def summarize_text():
         }), 400
 
     extracted_text = data.get("text", "").strip()
-
+    if len(extracted_text) > 200000:
+        return jsonify({"success": False, "error": "The text is too large to summarize."}), 413
+    if _rate_limited("summarize", 5, 300):
+        return jsonify({"success": False, "error": "Too many summary requests. Please try again later."}), 429
     if not extracted_text:
         return jsonify({
             "success": False,
@@ -377,11 +412,11 @@ def summarize_text():
             "processed_length": summary_result["processed_length"]
         }), 200
 
-    except ValueError as val_err:
-        # User-correctable or configuration error (e.g. missing API key, empty text)
+    except ValueError:
+        logger.exception("AI summary validation/service failure")
         return jsonify({
             "success": False,
-            "error": str(val_err)
+            "error": "The summary could not be generated. Please try again later."
         }), 400
     except Exception:
         logger.exception("AI summary request failed")
@@ -562,21 +597,26 @@ def upload_study_material():
         if file_size > app.config["MAX_CONTENT_LENGTH"]:
             return handle_error("File size exceeds the 16 MB limit. Please upload a smaller PDF.", 413)
 
-        # 9. Secure filename and save to uploads/
+        # 9. Generate a safe, collision-resistant stored filename.
+        # The user-controlled name is only used for validation/telemetry; the
+        # on-disk name is a server-generated UUID so it can never become a path
+        # and can never overwrite or collide with an existing file.
         original_filename = file.filename
-        clean_filename = secure_filename(original_filename)
-        if not clean_filename or not clean_filename.lower().endswith(".pdf"):
-            clean_filename = f"study_material_{clean_filename}.pdf" if clean_filename else "study_material.pdf"
-
-        destination_path = UPLOAD_FOLDER / clean_filename
-        counter = 1
-        stem = destination_path.stem
+        if not is_allowed_pdf(original_filename) or not secure_filename(original_filename):
+            return handle_error("Invalid file type. Only valid PDF files (.pdf) are accepted.")
+        destination_path = UPLOAD_FOLDER / f"{uuid.uuid4().hex}.pdf"
         while destination_path.exists():
-            destination_path = UPLOAD_FOLDER / f"{stem}_{counter}.pdf"
-            counter += 1
+            destination_path = UPLOAD_FOLDER / f"{uuid.uuid4().hex}.pdf"
 
+        saved = False
         try:
             file.save(str(destination_path))
+            saved = True
+            # SHA-256 duplicate detection on actual content (never the filename).
+            content_hash = hashlib.sha256(destination_path.read_bytes()).hexdigest()
+            if get_material_by_content_hash(content_hash):
+                destination_path.unlink(missing_ok=True)
+                return handle_error("This PDF content has already been uploaded.", 409)
 
             # Verify PDF extraction using existing pdf_processor
             extraction = extract_text_from_pdf(destination_path)
@@ -591,12 +631,19 @@ def upload_study_material():
                 file_path=f"uploads/{destination_path.name}",
                 uploaded_by=session["user_id"],
                 status="pending",
-                extracted_text=extracted_text[:QNA_TEXT_STORE_LIMIT]
+                extracted_text=extracted_text[:QNA_TEXT_STORE_LIMIT],
+                content_hash=content_hash
             )
 
             # Step 11: build the RAG chunk index now so approval needs no re-scan.
+            # If indexing fails the upload still succeeds, but we must not leave a
+            # half-registered record pointing at a file we then delete, so an
+            # indexing failure only logs (the material row + file remain valid).
             if extracted_text:
-                index_material(material_id)
+                try:
+                    index_material(material_id)
+                except Exception:
+                    logger.exception("RAG indexing failed for material %s", material_id)
 
             success_message = "Study material submitted successfully."
             status_message = "Status: Pending Approval"
@@ -617,8 +664,15 @@ def upload_study_material():
             flash(f"{success_message} Your note has been queued for administrator review.", "success")
             return redirect(url_for("my_study_materials"))
 
-        except Exception as exc:
-            return handle_error(f"Failed to process study material: {str(exc)}", 500)
+        except Exception:
+            logger.exception("Study material processing failed for user %s", session.get("user_id"))
+            # Clean up the orphaned file so failed uploads never accumulate.
+            if saved:
+                try:
+                    destination_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.exception("Could not remove rejected upload %s", destination_path)
+            return handle_error("Failed to process your study material. Please try again.", 500)
 
     return render_template(
         "upload_material.html",
@@ -698,9 +752,11 @@ def quiz_generate(material_id):
     try:
         questions = generate_quiz_questions(content, question_type, difficulty, count)
         quiz_id = create_quiz(material_id, session["user_id"], f"{material['topic']} Quiz", question_type, difficulty, count, questions)
-    except ValueError as exc:
-        return _quiz_error(str(exc))
+    except ValueError:
+        logger.exception("Legacy quiz generation validation failed")
+        return _quiz_error("Quiz generation could not be completed. Please review your selections and try again.")
     except Exception:
+        logger.exception("Legacy quiz generation failed")
         return _quiz_error("Quiz generation failed. Please try again later.", 503)
     return redirect(url_for("quiz_take", quiz_id=quiz_id))
 
@@ -855,8 +911,9 @@ def quiz_generate_api():
             rag["context"], number_of_questions, difficulty,
             course_name=course_name, topic=topic,
         )
-    except ValueError as exc:
-        return _quiz_json_error(str(exc), 503)
+    except ValueError:
+        logger.exception("Generated quiz validation/service failure")
+        return _quiz_json_error("Quiz generation is temporarily unavailable. Please try again later.", 503)
     except Exception:
         logger.exception("Quiz generation failed")
         return _quiz_json_error("Quiz generation failed. Please try again later.", 500)
@@ -976,8 +1033,9 @@ def quiz_submit_api(quiz_id):
 
     try:
         result = finalize_quiz_attempt(attempt["id"], user_id, questions, selected_answers)
-    except ValueError as exc:
-        return _quiz_json_error(str(exc), 409)
+    except ValueError:
+        logger.exception("Quiz submission conflict")
+        return _quiz_json_error("This quiz attempt is no longer available for submission.", 409)
     except Exception:
         logger.exception("Quiz submission failed")
         return _quiz_json_error("Quiz submission failed. Please try again later.", 500)
@@ -1086,16 +1144,16 @@ def ask_studymate_api():
             "course_code": item["course_code"],
             "topic": item["topic"],
             "exam_type": item["exam_type"],
-            "library_url": url_for("study_library", q=item["topic"]),
+            "library_url": url_for("study_library_material_pdf", material_id=item["material_id"]),
         }
         for item in rag["sources"]
     ]
 
     try:
         result = answer_study_question(question, rag["context"])
-    except ValueError as exc:
-        # User-friendly, non-leaking AI error (missing key, rate limit, outage, etc.)
-        return _qna_error(str(exc), 503)
+    except ValueError:
+        logger.exception("Ask StudyMate validation/service failure")
+        return _qna_error("StudyMate is temporarily unavailable. Please try again later.", 503)
     except Exception:
         logger.exception("Ask StudyMate request failed")
         return _qna_error("StudyMate is temporarily unavailable. Please try again later.", 500)
@@ -1424,15 +1482,6 @@ def logout_post():
     flash("You have been successfully logged out.", "info")
     return redirect(url_for("login"))
 
-@app.route("/logout", methods=["GET"])
-def logout():
-    """
-    Logs out the user and clears session state.
-    """
-    logout_session()
-    flash("You have been successfully logged out.", "info")
-    return redirect(url_for("login"))
-
 
 @app.route("/dashboard")
 @login_required
@@ -1520,5 +1569,7 @@ def request_entity_too_large(error):
 
 
 if __name__ == "__main__":
-    # debug=True auto-reloads the server when you change code.
-    app.run(debug=True)
+    # Development debug requires an explicit opt-in and is never enabled in production.
+    debug_enabled = (os.environ.get("FLASK_DEBUG", "0").lower() in ("1", "true", "yes")
+                     and not _production_mode)
+    app.run(debug=debug_enabled)

@@ -9,7 +9,8 @@ export default async function run(page) {
 
   async function login(email, password) {
     // Ensure a fresh, logged-out login form is present.
-    await page.goto(`${BASE}/logout`, { waitUntil: 'domcontentloaded' });
+    // Logout is POST-only now; GET /logout must not change state (returns 405).
+    await page.request.post(`${BASE}/logout`);
     await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => !!document.querySelector('input[name="email"]'), { timeout: 30000 });
     // Fill and submit via the form element directly (robust against a headless

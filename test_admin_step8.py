@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 from werkzeug.security import generate_password_hash
 from app import app
+from tests_helpers import unique_pdf
 from database.db import (
     get_department_by_code, get_course_by_code, create_user,
     create_study_material, get_study_material_details,
@@ -76,7 +77,7 @@ def run_step8_tests():
     # Existing student workflow and summary endpoint remain available.
     upload = student.post("/study-material/upload", data={
         "course_id": str(course["id"]), "exam_type": "both", "topic": "Regression Topic",
-        "file": (io.BytesIO(pdf_bytes), "step8_regression.pdf")
+        "file": (io.BytesIO(unique_pdf(pdf_bytes)), "step8_regression.pdf")
     }, content_type="multipart/form-data", headers={"Accept": "application/json"})
     assert upload.status_code == 201 and upload.get_json()["status"] == "pending"
     assert student.get("/my-study-materials").status_code == 200

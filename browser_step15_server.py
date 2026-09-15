@@ -10,4 +10,6 @@ if not user:
 else:
     user_id = user["id"]
 create_notification(user_id, "new_material", "Security QA update", "A safe notification for browser QA.", "/dashboard")
+# Browser QA fixture: disable CSRF so the script can drive POST-only flows.
+app.config["CSRF_PROTECTION"] = False
 app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)

@@ -13,6 +13,9 @@ from app import app
 
 class TestAiService(unittest.TestCase):
     def setUp(self):
+        # Consistent with the other suites: CSRF is disabled only for the test
+        # client; production CSRF protection is covered by test_security_step15.
+        app.config["TESTING"] = True
         self.client = app.test_client()
 
     def test_missing_or_placeholder_key_raises_value_error(self):

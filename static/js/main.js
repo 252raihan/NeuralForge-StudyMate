@@ -7,7 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 /**
- * Mobile navbar toggle logic
+ * Mobile navbar toggle logic & desktop "More" dropdown
  */
 function initMobileMenu() {
   const button = document.getElementById('menu-btn');
@@ -15,21 +15,78 @@ function initMobileMenu() {
   const openIcon = document.getElementById('icon-open');
   const closeIcon = document.getElementById('icon-close');
 
-  if (!button || !menu) return;
-  button.addEventListener('click', () => {
-    const isOpen = !menu.classList.contains('hidden');
-    menu.classList.toggle('hidden', isOpen);
-    openIcon.classList.toggle('hidden', !isOpen);
-    closeIcon.classList.toggle('hidden', isOpen);
-    button.setAttribute('aria-expanded', String(!isOpen));
-  });
+  if (button && menu) {
+    const toggleMenu = (forceOpen) => {
+      const willBeOpen = typeof forceOpen === 'boolean' ? forceOpen : menu.classList.contains('hidden');
+      menu.classList.toggle('hidden', !willBeOpen);
+      if (openIcon) openIcon.classList.toggle('hidden', willBeOpen);
+      if (closeIcon) closeIcon.classList.toggle('hidden', !willBeOpen);
+      button.setAttribute('aria-expanded', String(willBeOpen));
+    };
 
-  menu.querySelectorAll('a').forEach((link) => link.addEventListener('click', () => {
-    menu.classList.add('hidden');
-    openIcon.classList.remove('hidden');
-    closeIcon.classList.add('hidden');
-    button.setAttribute('aria-expanded', 'false');
-  }));
+    button.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleMenu();
+    });
+
+    // Close mobile menu when clicking any link inside (excluding forms/submit buttons)
+    menu.querySelectorAll('a').forEach((item) => {
+      item.addEventListener('click', () => {
+        toggleMenu(false);
+      });
+    });
+
+    // Close mobile menu when clicking outside or pressing Escape
+    document.addEventListener('click', (e) => {
+      if (!menu.classList.contains('hidden') && !menu.contains(e.target) && !button.contains(e.target)) {
+        toggleMenu(false);
+      }
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !menu.classList.contains('hidden')) {
+        toggleMenu(false);
+        button.focus();
+      }
+    });
+  }
+
+  // Desktop "More" dropdown logic
+  const moreBtn = document.getElementById('nav-more-btn');
+  const moreMenu = document.getElementById('nav-more-menu');
+  if (moreBtn && moreMenu) {
+    const toggleMore = (forceOpen) => {
+      const willBeOpen = typeof forceOpen === 'boolean' ? forceOpen : moreMenu.classList.contains('hidden');
+      moreMenu.classList.toggle('hidden', !willBeOpen);
+      moreBtn.setAttribute('aria-expanded', String(willBeOpen));
+    };
+
+    moreBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleMore();
+    });
+
+    // Close when clicking dropdown links
+    moreMenu.querySelectorAll('a').forEach((link) => {
+      link.addEventListener('click', () => {
+        toggleMore(false);
+      });
+    });
+
+    // Close dropdown on outside click or escape
+    document.addEventListener('click', (e) => {
+      if (!moreMenu.classList.contains('hidden') && !moreMenu.contains(e.target) && !moreBtn.contains(e.target)) {
+        toggleMore(false);
+      }
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !moreMenu.classList.contains('hidden')) {
+        toggleMore(false);
+        moreBtn.focus();
+      }
+    });
+  }
 }
 
 /**
@@ -100,32 +157,54 @@ function initPdfUpload() {
     return isExtensionPdf && isMimePdf;
   }
 
-  // Display status message (error or success)
+  // Display status message (error or success). Built with safe DOM APIs so any
+  // server-provided text is rendered as text, never interpreted as HTML.
   function showStatus(type, message, details = '') {
-    statusArea.innerHTML = '';
+    statusArea.replaceChildren();
     statusArea.classList.remove('hidden');
 
     const isError = type === 'error';
     const bgColor = isError ? 'bg-rose-500/10 border-rose-500/30 text-rose-300' : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300';
     const iconPath = isError
-      ? '<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />'
-      : '<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />';
+      ? 'M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z'
+      : 'M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z';
 
-    statusArea.innerHTML = `
-      <div class="rounded-xl border p-4 ${bgColor} flex items-start gap-3">
-        <svg class="w-5 h-5 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          ${iconPath}
-        </svg>
-        <div class="text-xs sm:text-sm leading-relaxed flex-1">
-          <p class="font-semibold">${message}</p>
-          ${details ? `<p class="mt-1 text-xs opacity-90">${details}</p>` : ''}
-        </div>
-      </div>
-    `;
+    const wrapper = document.createElement('div');
+    wrapper.className = `rounded-xl border p-4 ${bgColor} flex items-start gap-3`;
+
+    const svgNs = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNs, 'svg');
+    svg.setAttribute('class', 'w-5 h-5 shrink-0 mt-0.5');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    const path = document.createElementNS(svgNs, 'path');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    path.setAttribute('d', iconPath);
+    svg.appendChild(path);
+
+    const body = document.createElement('div');
+    body.className = 'text-xs sm:text-sm leading-relaxed flex-1';
+    const titleEl = document.createElement('p');
+    titleEl.className = 'font-semibold';
+    titleEl.textContent = message;
+    body.appendChild(titleEl);
+    if (details) {
+      const detailEl = document.createElement('p');
+      detailEl.className = 'mt-1 text-xs opacity-90 break-words';
+      detailEl.textContent = details;
+      body.appendChild(detailEl);
+    }
+
+    wrapper.appendChild(svg);
+    wrapper.appendChild(body);
+    statusArea.appendChild(wrapper);
   }
 
   function clearStatus() {
-    statusArea.innerHTML = '';
+    statusArea.replaceChildren();
     statusArea.classList.add('hidden');
   }
 
@@ -365,7 +444,7 @@ function initPdfUpload() {
     if (summaryLoadingWrapper) summaryLoadingWrapper.classList.add('hidden');
     if (summaryErrorArea) {
       summaryErrorArea.classList.add('hidden');
-      summaryErrorArea.innerHTML = '';
+      summaryErrorArea.replaceChildren();
     }
     if (summaryResultArea) summaryResultArea.classList.add('hidden');
   }
@@ -373,20 +452,42 @@ function initPdfUpload() {
   function showSummaryError(title, message) {
     if (!summaryErrorArea) return;
     summaryErrorArea.classList.remove('hidden');
-    summaryErrorArea.innerHTML = `
-      <div class="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-rose-300 flex items-start gap-3">
-        <svg class="w-5 h-5 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
-        </svg>
-        <div class="text-xs sm:text-sm leading-relaxed flex-1">
-          <p class="font-bold text-rose-200">${title}</p>
-          <p class="mt-1 text-xs opacity-90">${message}</p>
-          ${message.toLowerCase().includes('api key') ? '<p class="mt-2 text-[11px] text-brand-300 font-mono">Tip: Set OPENAI_API_KEY="your-real-key" in your .env file and restart Flask.</p>' : ''}
-        </div>
-      </div>
-    `;
+    summaryErrorArea.replaceChildren();
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'rounded-xl border-rose-500/30 bg-rose-500/10 p-4 text-rose-300 flex items-start gap-3';
+
+    const svgNs = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNs, 'svg');
+    svg.setAttribute('class', 'w-5 h-5 shrink-0 mt-0.5');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    const path = document.createElementNS(svgNs, 'path');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    path.setAttribute('d', 'M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z');
+    svg.appendChild(path);
+
+    const body = document.createElement('div');
+    body.className = 'text-xs sm:text-sm leading-relaxed flex-1 min-w-0';
+    const titleEl = document.createElement('p');
+    titleEl.className = 'font-bold text-rose-200';
+    titleEl.textContent = title;
+    const messageEl = document.createElement('p');
+    messageEl.className = 'mt-1 text-xs opacity-90 break-words';
+    messageEl.textContent = message;
+    body.appendChild(titleEl);
+    body.appendChild(messageEl);
+
+    wrapper.appendChild(svg);
+    wrapper.appendChild(body);
+    summaryErrorArea.appendChild(wrapper);
     summaryErrorArea.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
+
+  /* Legacy inline error markup removed - now built with safe DOM APIs. */
 
   /**
    * Simple, safe Markdown to HTML renderer for study summaries.
@@ -459,7 +560,7 @@ function initPdfUpload() {
       // Hide previous results and errors
       if (summaryErrorArea) {
         summaryErrorArea.classList.add('hidden');
-        summaryErrorArea.innerHTML = '';
+        summaryErrorArea.replaceChildren();
       }
       if (summaryResultArea) summaryResultArea.classList.add('hidden');
 
@@ -470,10 +571,13 @@ function initPdfUpload() {
       generateSummaryBtnText.textContent = 'Generating...';
 
       try {
+        const csrfInput = uploadForm ? uploadForm.querySelector('input[name="csrf_token"]') : null;
+        const csrfToken = csrfInput ? csrfInput.value : '';
         const response = await fetch('/summarize', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'X-CSRF-Token': csrfToken,
           },
           body: JSON.stringify({
             text: textToSummarize,

@@ -54,10 +54,10 @@
     <h2 class="text-lg font-bold text-white mb-3">Quiz Performance</h2>
     <div class="space-y-3 mb-10">
       {% for item in quiz_performance %}
-      <article class="rounded-2xl border-white/10 bg-slate-900/80 p-4 flex-wrap items-center justify-between gap-3">
-        <div>
-          <p class="font-semibold text-white">{{ item.quiz_title }}</p>
-          <div class="mt-1 flex-wrap gap-2 text-xs text-slate-400">
+      <article class="rounded-2xl border-white/10 bg-slate-900/80 p-4 flex flex-wrap items-center justify-between gap-3">
+        <div class="min-w-0 flex-1">
+          <p class="font-semibold text-white break-words">{{ item.quiz_title }}</p>
+          <div class="mt-1 flex flex-wrap gap-2 text-xs text-slate-400">
             {% if item.course_code %}<span class="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono">{{
               item.course_code }}</span>{% endif %}
             <span>Topic: {{ item.topic }}</span><span>· {{ item.submitted_at }}</span>
@@ -147,7 +147,7 @@
     <h2 class="text-lg font-bold text-white mb-3">Recent Performance</h2>
     <div class="space-y-2">
       {% for item in recent_performance %}
-      <div class="rounded-xl border-white/10 bg-slate-900/60 p-3 flex-wrap items-center justify-between gap-2 text-sm">
+      <div class="rounded-xl border-white/10 bg-slate-900/60 p-3 flex flex-wrap items-center justify-between gap-2 text-sm">
         <span class="text-slate-200">{{ item.quiz_title }} <span class="text-slate-500">· {{ item.topic }}</span></span>
         <span class="text-slate-400 text-xs">{{ item.submitted_at }}</span>
         <span class="font-bold {% if item.percentage >= 50 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{

@@ -10,7 +10,7 @@
       <h1 class="mt-1 text-3xl font-extrabold tracking-tight text-white">Welcome back, {{ current_user.name }}</h1>
       <p class="mt-2 text-sm text-slate-400">Your study activity and learning progress in one place.</p>
     </div>
-    <div class="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-8">
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-8">
       {% for label, value, icon in [('Materials', stats.materials_count, '📚'), ('Bookmarks', stats.bookmarks_count,
       '⭐'), ('Quizzes', stats.quizzes_count, '🧠'), ('Attempts', stats.attempts_count, '📝'), ('Average',
       stats.average_score ~ '%', '📊'), ('Highest', stats.highest_score ~ '%', '🏆'), ('Lowest', stats.lowest_score ~
@@ -29,9 +29,9 @@
         </div>{% if recent_materials %}<div class="mt-4 space-y-3">{% for item in recent_materials %}<div
             class="rounded-xl border-white/5 bg-slate-950/50 p-3">
             <div class="flex items-start justify-between gap-3">
-              <div>
-                <p class="font-semibold text-white">{{ item.topic }}</p>
-                <p class="text-xs text-slate-400">{{ item.course_code }} · {{ item.course_name }}</p>
+              <div class="min-w-0">
+                <p class="font-semibold text-white break-words">{{ item.topic }}</p>
+                <p class="text-xs text-slate-400 break-words">{{ item.course_code }} · {{ item.course_name }}</p>
                 <p class="mt-1 text-xs text-slate-500">{{ item.created_at }}</p>
               </div><span
                 class="rounded-lg px-2 py-1 text-[11px] capitalize {% if item.status == 'approved' %}bg-emerald-500/10 text-emerald-300{% elif item.status == 'rejected' %}bg-rose-500/10 text-rose-300{% else %}bg-amber-500/10 text-amber-300{% endif %}">{{

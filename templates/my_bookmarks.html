@@ -68,7 +68,7 @@
         <p class="mt-2 text-sm text-slate-300">{{ item.course_name }} · {{ item.department_code }}</p>
         <p class="mt-2 text-xs text-slate-400 capitalize">Exam: {{ item.exam_type }} · Bookmarked: {{ item.bookmarked_at
           }}</p>
-        <div class="mt-5 flex-wrap gap-2"><a href="{{ url_for('study_library_material_pdf', material_id=item.id) }}"
+        <div class="mt-5 flex flex-wrap gap-2"><a href="{{ url_for('study_library_material_pdf', material_id=item.id) }}"
             target="_blank" class="px-3 py-2 rounded-lg border-white/10 text-slate-200 text-xs">👁️ View</a><a
             href="{{ url_for('study_library_material_download', material_id=item.id) }}"
              class="px-3 py-2 rounded-lg bg-brand-600 text-white text-xs font-bold">⬇️ Download</a><a href="{{ url_for('quiz_create', material_id=item.id) }}" class="px-3 py-2 rounded-lg bg-purple-600 text-white text-xs font-bold">🧠 Generate Quiz</a>

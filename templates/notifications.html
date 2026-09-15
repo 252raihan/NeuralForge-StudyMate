@@ -14,7 +14,7 @@
         <button class="rounded-lg bg-brand-600 px-4 py-2 text-xs font-bold text-white hover:bg-brand-500">Mark all as
           read</button></form>{% endif %}
     </div>
-    <form method="GET" class="mb-6 grid-cols-1 gap-3 sm:grid-cols-3"><select name="type" class="form-select">
+    <form method="GET" class="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3"><select name="type" class="form-select">
         <option value="">All notifications</option>
         <option value="material_approved" {% if notification_type=='material_approved' %}selected{% endif %}>Material
           approved</option>

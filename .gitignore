@@ -13,3 +13,6 @@ venv/
 # Editor
 .vscode/
 .idea/
+
+# Debug / runtime artifacts
+*.log

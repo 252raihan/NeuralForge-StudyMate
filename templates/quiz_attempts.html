@@ -12,10 +12,10 @@
     {% if attempts %}
     <div class="space-y-3">
       {% for attempt in attempts %}
-      <article class="rounded-2xl border-white/10 bg-slate-900/80 p-5 flex-wrap items-center justify-between gap-4">
-        <div>
-          <p class="font-bold text-white">{{ attempt.title }}</p>
-          <div class="mt-1 flex-wrap gap-2 text-xs text-slate-400">
+      <article class="rounded-2xl border-white/10 bg-slate-900/80 p-5 flex flex-wrap items-center justify-between gap-4">
+        <div class="min-w-0 flex-1">
+          <p class="font-bold text-white break-words">{{ attempt.title }}</p>
+          <div class="mt-1 flex flex-wrap gap-2 text-xs text-slate-400">
             <span class="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono">{{ attempt.course_code
               }}</span>
             <span>Topic: {{ attempt.topic }}</span>

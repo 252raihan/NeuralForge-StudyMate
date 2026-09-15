@@ -38,7 +38,10 @@ export default async function run(page) {
   const viewport = await page.evaluate(() => { const root = document.documentElement; const offenders = [...document.querySelectorAll('*')].filter(el => { const rect = el.getBoundingClientRect(); return rect.right > window.innerWidth + 1; }).slice(0, 8).map(el => ({ tag: el.tagName, id: el.id, className: el.className, right: Math.round(el.getBoundingClientRect().right) })); return { width: window.innerWidth, overflow: root.scrollWidth > root.clientWidth, offenders }; });
   result.responsive = viewport;
   check("responsive layout", viewport.width === 390 && viewport.overflow === false);
-  await page.goto(`${BASE_URL}/logout`);
+  // Logout is POST-only; GET /logout must not change state (405).
+  const getLogout = await page.request.get(`${BASE_URL}/logout`);
+  check("GET /logout is rejected (405)", getLogout.status() === 405);
+  await page.request.post(`${BASE_URL}/logout`);
   await page.goto(`${BASE_URL}/dashboard`);
   check("dashboard protected after logout", page.url().includes("/login"));
   check("all browser checks passed", result.steps.every(step => step.ok) && result.consoleErrors.length === 0 && result.failedRequests.length === 0);
@@ -46,7 +49,7 @@ export default async function run(page) {
 }
 async function runStandalone() {
   const root = path.dirname(fileURLToPath(import.meta.url));
-  const server = spawn(process.env.PYTHON || "python", ["-c", "from app import app; app.run(host='127.0.0.1', port=5000, debug=False, use_reloader=False)"], { cwd: root, stdio: "inherit" });
+  const server = spawn(process.env.PYTHON || "python", ["-c", "from app import app; app.config['CSRF_PROTECTION'] = False; app.run(host='127.0.0.1', port=5000, debug=False, use_reloader=False)"], { cwd: root, stdio: "inherit" });
   const cleanup = () => { if (!server.killed) server.kill(); };
   try { await waitForServer("127.0.0.1", 5000); const runner = path.join(process.env.CODEGPT_SKILL_DIR || "C:\\Users\\HP\\.codegpt\\skills\\browser-automation", "browser.mjs"); const child = spawn(process.execPath, [runner, "data:text/html,<title>Step13%20QA</title>", "--script", path.join(root, "browser_step13_qa.mjs")], { cwd: root, stdio: "inherit" }); await new Promise((resolve, reject) => { child.once("exit", code => code === 0 ? resolve() : reject(new Error(`Browser QA exited with ${code}`))); child.once("error", reject); }); } finally { cleanup(); }
 }

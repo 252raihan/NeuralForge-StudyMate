@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS study_materials (
     exam_type TEXT NOT NULL CHECK (exam_type IN ('midterm', 'final', 'both')),
     file_path TEXT NOT NULL,
     extracted_text TEXT,
+    content_hash TEXT,
     uploaded_by INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -80,6 +81,7 @@ CREATE INDEX IF NOT EXISTS idx_study_materials_course_id ON study_materials(cour
 CREATE INDEX IF NOT EXISTS idx_study_materials_status ON study_materials(status);
 CREATE INDEX IF NOT EXISTS idx_study_materials_exam_type ON study_materials(exam_type);
 CREATE INDEX IF NOT EXISTS idx_study_materials_uploaded_by ON study_materials(uploaded_by);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_study_materials_content_hash ON study_materials(content_hash) WHERE content_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_study_materials_course_status ON study_materials(course_id, status);
 CREATE INDEX IF NOT EXISTS idx_material_chunks_material_id ON material_chunks(material_id);
 
@@ -223,6 +225,7 @@ CREATE INDEX IF NOT EXISTS idx_gen_attempts_user_id ON generated_quiz_attempts(u
 CREATE INDEX IF NOT EXISTS idx_gen_attempts_quiz_id ON generated_quiz_attempts(quiz_id);
 CREATE INDEX IF NOT EXISTS idx_gen_attempts_user_submitted ON generated_quiz_attempts(user_id, submitted_at);
 CREATE INDEX IF NOT EXISTS idx_gen_attempt_answers_attempt_id ON generated_quiz_attempt_answers(attempt_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_generated_attempt ON generated_quiz_attempts(quiz_id, user_id) WHERE submitted_at IS NULL;
 
 -- 6. BOOKMARKS TABLE (Step 12)
 CREATE TABLE IF NOT EXISTS bookmarks (

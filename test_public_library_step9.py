@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 from werkzeug.security import generate_password_hash
 from app import app
+from tests_helpers import unique_pdf
 from database.db import (
     get_department_by_code, get_course_by_code, get_department_by_id,
     create_user, create_study_material, get_study_material_details,
@@ -68,7 +69,7 @@ def run_step9_tests():
     # 20-23: existing upload, history, auth and summary.
     upload = client.post("/study-material/upload", data={
         "course_id": str(cse_course_id), "exam_type": "both", "topic": "Step 9 Regression",
-        "file": (io.BytesIO(pdf), "step9_regression.pdf")
+        "file": (io.BytesIO(unique_pdf(pdf)), "step9_regression.pdf")
     }, content_type="multipart/form-data", headers={"Accept": "application/json"})
     assert upload.status_code == 302
     login = client.post("/login", data={"email": student_email, "password": "Pass12345"})

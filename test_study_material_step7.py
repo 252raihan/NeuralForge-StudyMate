@@ -9,6 +9,7 @@ from pathlib import Path
 from werkzeug.security import generate_password_hash
 
 from app import app
+from tests_helpers import unique_pdf
 from database.db import (
     get_db_connection,
     get_department_by_code,
@@ -25,6 +26,9 @@ def run_step7_tests():
     print("RUNNING STEP 7 STUDY MATERIAL UPLOAD TEST SUITE")
     print("==================================================")
 
+    # Consistent with the other step suites: CSRF is disabled only for the test
+    # client; production CSRF protection is covered by test_security_step15.
+    app.config["TESTING"] = True
     pdf_sample_path = Path("sample_study_guide.pdf")
     assert pdf_sample_path.exists(), "sample_study_guide.pdf required for testing"
     sample_pdf_bytes = pdf_sample_path.read_bytes()
@@ -102,7 +106,7 @@ def run_step7_tests():
             "course_id": str(cse_course_id),
             "exam_type": "midterm",
             "topic": "Normalization",
-            "file": (io.BytesIO(sample_pdf_bytes), "lecture_normalization.pdf")
+            "file": (io.BytesIO(unique_pdf(sample_pdf_bytes)), "lecture_normalization.pdf")
         },
         headers={"Accept": "application/json"},
         content_type="multipart/form-data"
@@ -136,7 +140,7 @@ def run_step7_tests():
             "exam_type": "final",
             "topic": "ER Diagrams",
             "status": "approved",  # Malicious form field
-            "file": (io.BytesIO(sample_pdf_bytes), "er_diagrams.pdf")
+            "file": (io.BytesIO(unique_pdf(sample_pdf_bytes)), "er_diagrams.pdf")
         },
         headers={"Accept": "application/json"},
         content_type="multipart/form-data"
@@ -206,7 +210,7 @@ def run_step7_tests():
             "course_id": str(eee_course_id),
             "exam_type": "midterm",
             "topic": "Circuit Analysis",
-            "file": (io.BytesIO(sample_pdf_bytes), "notes.pdf")
+            "file": (io.BytesIO(unique_pdf(sample_pdf_bytes)), "notes.pdf")
         },
         headers={"Accept": "application/json"},
         content_type="multipart/form-data"
@@ -295,7 +299,9 @@ def run_step7_tests():
     auth_resp = student_client.get("/dashboard")
     assert auth_resp.status_code == 200
     assert auth_resp.get_json()["status"] == "authenticated"
-    logout_resp = student_client.get("/logout", follow_redirects=False)
+    # Logout is POST-only (GET /logout must not mutate state and returns 405).
+    assert student_client.get("/logout").status_code == 405, "GET /logout must not be allowed"
+    logout_resp = student_client.post("/logout", follow_redirects=False)
     assert logout_resp.status_code == 302
     print(">> TEST 19 PASSED: Existing authentication and logout preserved!")
 
